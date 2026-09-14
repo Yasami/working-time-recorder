@@ -1,0 +1,89 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # コードをチェックアウト
+      - uses: actions/checkout@v4
+
+      # Rustのセットアップ
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v2
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      # 必要に応じて、依存関係をキャッシュ
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build
+          restore-keys: |
+            ${{ runner.os }}-cargo-build
+
+      # ビルド実行
+      - name: Build
+        run: cargo build --release
+
+      # 実行ファイルをアーティファクトとして保存
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: executable-${{ matrix.os }}
+          path: target/release/<your_executable_name>
+
+  create_release:
+    # ビルドが成功したら実行
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      # コードをチェックアウト
+      - uses: actions/checkout@v4
+
+      # 各OS用のアーティファクトをダウンロード
+      - name: Download Linux Artifact
+        if: always()
+        uses: actions/download-artifact@v3
+        with:
+          name: executable-ubuntu-latest
+          path: ./linux
+
+      - name: Download Windows Artifact
+        if: always()
+        uses: actions/download-artifact@v3
+        with:
+          name: executable-windows-latest
+          path: ./windows
+
+      # GitHubリリースを自動で作成
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ./linux/<your_executable_name>
+            ./windows/<your_executable_name>
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
