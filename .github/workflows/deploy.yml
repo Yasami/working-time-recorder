@@ -36,7 +36,7 @@ jobs:
         shell: pwsh
         run: |
           $name = "working-time-recorder-${{ github.ref_name }}-windows-x86_64.zip"
-          Compress-Archive -Path target/release/working-time-recorder.exe, README.md -DestinationPath $name
+          Compress-Archive -Path target/release/working-time-recorder.exe, target/release/working-time-viewer.exe, README.md -DestinationPath $name
           "ASSET=$name" >> $env:GITHUB_ENV
 
       # GitHubリリースを作成
