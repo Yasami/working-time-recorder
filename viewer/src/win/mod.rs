@@ -1,0 +1,262 @@
+//! タスクトレイ常駐とウィンドウ管理 (Win32)
+
+mod bar;
+mod gdi;
+mod history;
+mod panel;
+
+use std::cell::RefCell;
+use std::mem::{size_of, zeroed};
+use std::path::PathBuf;
+use std::ptr::{null, null_mut};
+
+use windows_sys::core::{w, PCWSTR};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
+use windows_sys::Win32::Graphics::Gdi::HMONITOR;
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::CreateMutexW;
+use windows_sys::Win32::UI::HiDpi::{
+    GetDpiForSystem, GetSystemMetricsForDpi, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
+use windows_sys::Win32::UI::Shell::{
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE,
+    NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+use crate::record::{self, Records};
+
+const HOST_CLASS: PCWSTR = w!("WorkingTimeViewer.Host");
+const WM_TRAY: u32 = WM_APP + 1;
+const TRAY_UID: u32 = 1;
+const NIN_SELECT: u32 = WM_USER;
+const NIN_KEYSELECT: u32 = WM_USER + 1;
+
+const ID_MENU_TODAY: usize = 1;
+const ID_MENU_HISTORY: usize = 2;
+const ID_MENU_EXIT: usize = 3;
+
+pub struct State {
+    pub host: HWND,
+    pub panel: HWND,
+    pub history: HWND,
+    pub record_path: PathBuf,
+    pub records: Result<Records, String>,
+    pub tray_icon: HICON,
+    pub taskbar_created: u32,
+    pub panel_monitor: HMONITOR,
+    pub panel_hover: bool,
+    pub panel_hidden_at: u32,
+    pub history_scroll: i32,
+}
+
+thread_local! {
+    static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+}
+
+/// 状態へのアクセス。
+/// クロージャ内でメッセージを送る Win32 API (ShowWindow など) を呼ぶと
+/// ウィンドウプロシージャが再入して二重借用になるので、値の読み書きだけにすること。
+pub fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
+    STATE.with(|state| f(state.borrow_mut().as_mut().expect("state is not initialized")))
+}
+
+pub fn reload_records() {
+    let path = with_state(|s| s.record_path.clone());
+    let records = record::load(&path);
+    with_state(|s| s.records = records);
+}
+
+pub fn hinstance() -> windows_sys::Win32::Foundation::HINSTANCE {
+    unsafe { GetModuleHandleW(null()) }
+}
+
+pub fn run() {
+    unsafe {
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+        let mutex = CreateMutexW(null(), 1, w!("Local\\WorkingTimeViewer.SingleInstance"));
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            CloseHandle(mutex);
+            return;
+        }
+
+        let dpi = GetDpiForSystem();
+        let small_icon = gdi::create_app_icon(GetSystemMetricsForDpi(SM_CXSMICON, dpi));
+        let large_icon = gdi::create_app_icon(GetSystemMetricsForDpi(SM_CXICON, dpi));
+
+        STATE.with(|state| {
+            *state.borrow_mut() = Some(State {
+                host: null_mut(),
+                panel: null_mut(),
+                history: null_mut(),
+                record_path: record::record_path(),
+                records: Ok(Records::default()),
+                tray_icon: small_icon,
+                taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
+                panel_monitor: null_mut(),
+                panel_hover: false,
+                panel_hidden_at: 0,
+                history_scroll: 0,
+            })
+        });
+
+        register_class(HOST_CLASS, host_proc, null_mut(), null_mut());
+        register_class(panel::CLASS, panel::wndproc, small_icon, large_icon);
+        register_class(history::CLASS, history::wndproc, small_icon, large_icon);
+
+        let host = CreateWindowExW(
+            0,
+            HOST_CLASS,
+            w!("Working Time Viewer"),
+            WS_OVERLAPPED,
+            0,
+            0,
+            0,
+            0,
+            null_mut(),
+            null_mut(),
+            hinstance(),
+            null(),
+        );
+        let panel = panel::create();
+        with_state(|s| {
+            s.host = host;
+            s.panel = panel;
+        });
+
+        add_tray_icon();
+
+        let mut msg: MSG = zeroed();
+        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+
+        remove_tray_icon();
+        DestroyIcon(small_icon);
+        DestroyIcon(large_icon);
+        CloseHandle(mutex);
+    }
+}
+
+unsafe fn register_class(
+    name: PCWSTR,
+    proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+    small_icon: HICON,
+    large_icon: HICON,
+) {
+    let class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        style: CS_HREDRAW | CS_VREDRAW,
+        lpfnWndProc: Some(proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: hinstance(),
+        hIcon: large_icon,
+        hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+        hbrBackground: null_mut(),
+        lpszMenuName: null(),
+        lpszClassName: name,
+        hIconSm: small_icon,
+    };
+    RegisterClassExW(&class);
+}
+
+fn tray_data() -> NOTIFYICONDATAW {
+    let (host, icon) = with_state(|s| (s.host, s.tray_icon));
+    let mut data: NOTIFYICONDATAW = unsafe { zeroed() };
+    data.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+    data.hWnd = host;
+    data.uID = TRAY_UID;
+    data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+    data.uCallbackMessage = WM_TRAY;
+    data.hIcon = icon;
+    let tip: Vec<u16> = "作業時間ビューワー".encode_utf16().collect();
+    let len = tip.len().min(data.szTip.len() - 1);
+    data.szTip[..len].copy_from_slice(&tip[..len]);
+    data
+}
+
+fn add_tray_icon() {
+    let mut data = tray_data();
+    unsafe {
+        Shell_NotifyIconW(NIM_ADD, &data);
+        data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+        Shell_NotifyIconW(NIM_SETVERSION, &data);
+    }
+}
+
+fn remove_tray_icon() {
+    let data = tray_data();
+    unsafe {
+        Shell_NotifyIconW(NIM_DELETE, &data);
+    }
+}
+
+unsafe fn show_tray_menu(host: HWND) {
+    let menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, ID_MENU_TODAY, w!("今日の作業時間"));
+    AppendMenuW(menu, MF_STRING, ID_MENU_HISTORY, w!("履歴を表示"));
+    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    AppendMenuW(menu, MF_STRING, ID_MENU_EXIT, w!("終了"));
+
+    let mut point: POINT = zeroed();
+    GetCursorPos(&mut point);
+    // メニュー外クリックで閉じるために必要
+    SetForegroundWindow(host);
+    TrackPopupMenu(
+        menu,
+        TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_RIGHTALIGN,
+        point.x,
+        point.y,
+        0,
+        host,
+        null(),
+    );
+    PostMessageW(host, WM_NULL, 0, 0);
+    DestroyMenu(menu);
+}
+
+unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        WM_TRAY => {
+            match (lparam & 0xFFFF) as u32 {
+                NIN_SELECT | NIN_KEYSELECT => panel::toggle(),
+                WM_CONTEXTMENU => show_tray_menu(hwnd),
+                _ => {}
+            }
+            0
+        }
+        WM_COMMAND => {
+            match wparam & 0xFFFF {
+                ID_MENU_TODAY => panel::show(),
+                ID_MENU_HISTORY => history::open(),
+                ID_MENU_EXIT => {
+                    let history = with_state(|s| s.history);
+                    if !history.is_null() {
+                        DestroyWindow(history);
+                    }
+                    DestroyWindow(hwnd);
+                }
+                _ => {}
+            }
+            0
+        }
+        WM_DESTROY => {
+            PostQuitMessage(0);
+            0
+        }
+        _ => {
+            // エクスプローラーが再起動したらアイコンを登録し直す
+            if msg != 0 && msg == with_state(|s| s.taskbar_created) {
+                add_tray_icon();
+                return 0;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+    }
+}
