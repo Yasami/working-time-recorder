@@ -104,8 +104,9 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn setup_test_file() -> String {
-        let test_file = "test_working_time_record.txt";
+    // テストは並列に実行されるので、テストごとに別のファイルを使う
+    fn setup_test_file(test_name: &str) -> String {
+        let test_file = &format!("test_working_time_record_{}.txt", test_name);
         if fs::metadata(test_file).is_ok() {
             fs::remove_file(test_file).unwrap();
         }
@@ -136,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_handle_start_command() {
-        let test_file = setup_test_file();
+        let test_file = setup_test_file("start");
         let args = vec![
             "program_name".to_string(),
             "start".to_string(),
@@ -152,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_handle_start_command_missing_task_name() {
-        let test_file = setup_test_file();
+        let test_file = setup_test_file("missing_task_name");
         let args = vec![
             "program_name".to_string(),
             "start".to_string(),
@@ -166,7 +167,7 @@ mod tests {
 
     #[test]
     fn test_handle_stop_command() {
-        let test_file = setup_test_file();
+        let test_file = setup_test_file("stop");
         let args = vec![
             "program_name".to_string(),
             "stop".to_string(),
