@@ -2,17 +2,18 @@ name: Build and Release
 
 on:
   push:
-    branches: [ "main" ]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  release:
+    runs-on: windows-latest
 
     steps:
       # コードをチェックアウト
@@ -20,70 +21,27 @@ jobs:
 
       # Rustのセットアップ
       - name: Set up Rust
-        uses: actions-rs/toolchain@v2
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
-      # 必要に応じて、依存関係をキャッシュ
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry
-
-      - name: Cache Cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build
-          restore-keys: |
-            ${{ runner.os }}-cargo-build
+      # 依存関係とビルド成果物をキャッシュ
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
 
       # ビルド実行
       - name: Build
         run: cargo build --release
 
-      # 実行ファイルをアーティファクトとして保存
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: executable-${{ matrix.os }}
-          path: target/release/<your_executable_name>
+      # 実行ファイルをzipにまとめる
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "working-time-recorder-${{ github.ref_name }}-windows-x86_64.zip"
+          Compress-Archive -Path target/release/working-time-recorder.exe, README.md -DestinationPath $name
+          "ASSET=$name" >> $env:GITHUB_ENV
 
-  create_release:
-    # ビルドが成功したら実行
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      # コードをチェックアウト
-      - uses: actions/checkout@v4
-
-      # 各OS用のアーティファクトをダウンロード
-      - name: Download Linux Artifact
-        if: always()
-        uses: actions/download-artifact@v3
-        with:
-          name: executable-ubuntu-latest
-          path: ./linux
-
-      - name: Download Windows Artifact
-        if: always()
-        uses: actions/download-artifact@v3
-        with:
-          name: executable-windows-latest
-          path: ./windows
-
-      # GitHubリリースを自動で作成
+      # GitHubリリースを作成
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ./linux/<your_executable_name>
-            ./windows/<your_executable_name>
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: ${{ env.ASSET }}
+          generate_release_notes: true
