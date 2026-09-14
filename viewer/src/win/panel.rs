@@ -11,7 +11,8 @@ use windows_sys::Win32::Graphics::Dwm::{
 };
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, InvalidateRect, MonitorFromPoint, PtInRect, DT_CENTER, DT_END_ELLIPSIS,
-    DT_LEFT, DT_RIGHT, DT_VCENTER, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    DT_LEFT, DT_RIGHT, DT_VCENTER, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    MONITOR_DEFAULTTOPRIMARY,
 };
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -27,6 +28,7 @@ use crate::record::{format_hm, weekday_ja, DaySummary, IDLE_LABEL, WORKDAY_SECON
 pub const CLASS: PCWSTR = w!("WorkingTimeViewer.Panel");
 
 const TIMER_REFRESH: usize = 1;
+const TIMER_AUTO_HIDE: usize = 2;
 const REFRESH_INTERVAL_MS: u32 = 30_000;
 const WA_INACTIVE: usize = 0;
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -89,7 +91,7 @@ fn snapshot() -> Snapshot {
         Ok(records) => Snapshot {
             today: records.day_summary(now.date_naive(), now),
             current_task: records.current_task(now).map(str::to_owned),
-            error: None,
+            error: s.config_error.clone(),
         },
         Err(e) => Snapshot {
             today: DaySummary::empty(now.date_naive()),
@@ -138,22 +140,69 @@ pub fn toggle() {
     }
 }
 
+/// クリックやメニューから開く。フォーカスが外れたら閉じる
 pub fn show() {
     reload_records();
     let hwnd = with_state(|s| s.panel);
     unsafe {
         let mut cursor: POINT = zeroed();
         GetCursorPos(&mut cursor);
-        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
-        with_state(|s| {
-            s.panel_monitor = monitor;
-            s.panel_hover = false;
-        });
-        place(hwnd);
-        ShowWindow(hwnd, SW_SHOW);
+        open(hwnd, MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), SW_SHOW);
+        stop_auto_hide(hwnd);
         SetForegroundWindow(hwnd);
-        InvalidateRect(hwnd, null(), 0);
-        SetTimer(hwnd, TIMER_REFRESH, REFRESH_INTERVAL_MS, None);
+    }
+}
+
+/// 記録ファイルの変化などで自動的に開く。
+/// 作業の邪魔をしないようフォーカスは奪わず、設定した時間が経ったら閉じる
+pub fn show_auto() {
+    let (hwnd, auto, auto_hide) = with_state(|s| (s.panel, s.panel_auto, s.config.auto_hide));
+    unsafe {
+        if IsWindowVisible(hwnd) == 0 {
+            // タスクトレイのあるプライマリモニターに出す
+            open(hwnd, MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY), SW_SHOWNOACTIVATE);
+            with_state(|s| s.panel_auto = true);
+        } else if !auto {
+            // 自分で開いたパネルはそのまま
+            return;
+        }
+        // 自動で表示中にまた変化したら、消えるまでの時間を延ばす
+        match auto_hide {
+            Some(delay) => {
+                SetTimer(hwnd, TIMER_AUTO_HIDE, delay.as_millis().clamp(1, u32::MAX as u128) as u32, None);
+            }
+            None => {
+                KillTimer(hwnd, TIMER_AUTO_HIDE);
+            }
+        }
+    }
+}
+
+unsafe fn open(hwnd: HWND, monitor: HMONITOR, show_cmd: SHOW_WINDOW_CMD) {
+    with_state(|s| {
+        s.panel_monitor = monitor;
+        s.panel_hover = false;
+    });
+    place(hwnd);
+    ShowWindow(hwnd, show_cmd);
+    InvalidateRect(hwnd, null(), 0);
+    SetTimer(hwnd, TIMER_REFRESH, REFRESH_INTERVAL_MS, None);
+}
+
+/// 自動で表示したパネルを、自分で開いたものとして扱う
+fn stop_auto_hide(hwnd: HWND) {
+    unsafe { KillTimer(hwnd, TIMER_AUTO_HIDE) };
+    with_state(|s| s.panel_auto = false);
+}
+
+/// 表示中なら読み込み済みの記録で描き直す
+pub fn refresh() {
+    let hwnd = with_state(|s| s.panel);
+    unsafe {
+        if IsWindowVisible(hwnd) != 0 {
+            place(hwnd);
+            InvalidateRect(hwnd, null(), 0);
+        }
     }
 }
 
@@ -161,12 +210,21 @@ fn hide() {
     let hwnd = with_state(|s| s.panel);
     unsafe {
         KillTimer(hwnd, TIMER_REFRESH);
+        stop_auto_hide(hwnd);
         ShowWindow(hwnd, SW_HIDE);
         let now = GetTickCount();
         with_state(|s| {
             s.panel_hidden_at = now;
             s.panel_hover = false;
         });
+    }
+}
+
+fn cursor_in_window(hwnd: HWND) -> bool {
+    unsafe {
+        let mut cursor: POINT = zeroed();
+        let mut window: RECT = zeroed();
+        GetCursorPos(&mut cursor) != 0 && GetWindowRect(hwnd, &mut window) != 0 && PtInRect(&window, cursor) != 0
     }
 }
 
@@ -338,8 +396,13 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_ERASEBKGND => 1,
         WM_ACTIVATE => {
-            if wparam & 0xFFFF == WA_INACTIVE && IsWindowVisible(hwnd) != 0 {
-                hide();
+            if wparam & 0xFFFF == WA_INACTIVE {
+                if IsWindowVisible(hwnd) != 0 {
+                    hide();
+                }
+            } else {
+                // 自動で表示したパネルをクリックしたら、閉じるまで表示し続ける
+                stop_auto_hide(hwnd);
             }
             0
         }
@@ -377,10 +440,15 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             0
         }
         WM_TIMER => {
-            if wparam == TIMER_REFRESH {
-                reload_records();
-                place(hwnd);
-                InvalidateRect(hwnd, null(), 0);
+            match wparam {
+                TIMER_REFRESH => {
+                    reload_records();
+                    place(hwnd);
+                    InvalidateRect(hwnd, null(), 0);
+                }
+                // マウスを乗せている間は消さない (タイマーは繰り返すので、離れた後に消える)
+                TIMER_AUTO_HIDE if !cursor_in_window(hwnd) => hide(),
+                _ => {}
             }
             0
         }

@@ -47,7 +47,7 @@ pub struct Event {
     pub kind: EventKind,
 }
 
-/// ラベルファイルで定義したタスクの表示名と色
+/// 設定ファイルで定義したタスクの表示名と色
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Label {
     pub text: Option<String>,
@@ -66,7 +66,7 @@ pub struct TaskTotal {
     pub duration: Duration,
     /// ファイル内で最初に登場した順番。色分けに使う
     pub color: usize,
-    /// ラベルファイルで指定した色 (0xRRGGBB)
+    /// 設定ファイルで指定した色 (0xRRGGBB)
     pub rgb: Option<u32>,
 }
 
@@ -210,26 +210,6 @@ fn parse_line(line: &str) -> Option<Event> {
     Some(Event { time, kind })
 }
 
-/// 1行ごとに「タスク名<TAB>表示名<TAB>カラーコード」
-pub fn parse_labels(content: &str) -> Labels {
-    let mut labels = Labels::new();
-    for line in content.trim_start_matches('\u{feff}').lines() {
-        let mut columns = line.trim_end_matches('\r').split('\t');
-        let task = columns.next().unwrap_or("").trim();
-        if task.is_empty() {
-            continue;
-        }
-        let text = columns
-            .next()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned);
-        let color = columns.next().and_then(parse_color);
-        labels.insert(task.to_string(), Label { text, color });
-    }
-    labels
-}
-
 /// `#RRGGBB`、`#RGB`、HTML の基本色名を 0xRRGGBB にする
 pub fn parse_color(s: &str) -> Option<u32> {
     let s = s.trim();
@@ -276,26 +256,14 @@ pub fn record_path() -> PathBuf {
     }
 }
 
-/// 記録ファイルの横に置く `<記録ファイル名>.labels`
-pub fn labels_path(record_path: &Path) -> PathBuf {
-    let mut path = record_path.as_os_str().to_owned();
-    path.push(".labels");
-    PathBuf::from(path)
-}
-
 pub fn load(path: &Path) -> Result<Records, String> {
-    let records = match fs::read(path) {
-        Ok(bytes) => Records::parse(&String::from_utf8_lossy(&bytes)),
+    match fs::read(path) {
+        Ok(bytes) => Ok(Records::parse(&String::from_utf8_lossy(&bytes))),
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            return Err(format!("記録ファイルが見つかりません: {}", path.display()))
+            Err(format!("記録ファイルが見つかりません: {}", path.display()))
         }
-        Err(e) => return Err(format!("記録ファイルを読み込めません: {}", e)),
-    };
-    // ラベルファイルは無くてもよい
-    let labels = fs::read(labels_path(path))
-        .map(|bytes| parse_labels(&String::from_utf8_lossy(&bytes)))
-        .unwrap_or_default();
-    Ok(records.with_labels(labels))
+        Err(e) => Err(format!("記録ファイルを読み込めません: {}", e)),
+    }
 }
 
 /// `h:mm` 形式
@@ -443,16 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_labels() {
-        let labels = parse_labels("\u{feff}a\t設計作業\t#FF8800\r\nb\t\tnavy\nc\tレビュー\n\n\td\t#000\ne\tE\tinvalid\n");
-        assert_eq!(labels.len(), 4);
-        assert_eq!(labels["a"], Label { text: Some("設計作業".into()), color: Some(0xFF8800) });
-        assert_eq!(labels["b"], Label { text: None, color: Some(0x000080) });
-        assert_eq!(labels["c"], Label { text: Some("レビュー".into()), color: None });
-        assert_eq!(labels["e"], Label { text: Some("E".into()), color: None });
-    }
-
-    #[test]
     fn test_parse_color() {
         assert_eq!(parse_color("#1a2B3c"), Some(0x1A2B3C));
         assert_eq!(parse_color(" #abc "), Some(0xAABBCC));
@@ -466,7 +424,10 @@ mod tests {
     #[test]
     fn test_labels_are_applied() {
         let content = [start(at(14, 9, 0), "a"), start(at(14, 10, 0), "b")].concat();
-        let labels = parse_labels("a\t設計\t#FF0000\n");
+        let labels = Labels::from([(
+            "a".to_string(),
+            Label { text: Some("設計".into()), color: Some(0xFF0000) },
+        )]);
         let records = Records::parse(&content).with_labels(labels);
         let summary = records.day_summary(date(14), at(14, 11, 0));
         let shown: Vec<(&str, Option<u32>)> = summary
@@ -476,14 +437,6 @@ mod tests {
             .collect();
         assert_eq!(shown, vec![("設計", Some(0xFF0000)), ("b", None)]);
         assert_eq!(records.current_task(at(14, 11, 0)), Some("b"));
-    }
-
-    #[test]
-    fn test_labels_path() {
-        assert_eq!(
-            labels_path(Path::new("dir/working_time_record.txt")),
-            PathBuf::from("dir/working_time_record.txt.labels")
-        );
     }
 
     #[test]

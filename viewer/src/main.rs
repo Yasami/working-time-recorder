@@ -1,6 +1,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg_attr(not(windows), allow(dead_code))]
+mod config;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod record;
 #[cfg(windows)]
 mod win;
