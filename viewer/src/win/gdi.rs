@@ -13,6 +13,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateIconFromResourceEx, GetClientRect, HICON, LR_DEFAULTCOLOR,
 };
 
+use crate::record::TaskTotal;
+
 pub const fn rgb(hex: u32) -> COLORREF {
     ((hex >> 16) & 0xFF) | (hex & 0xFF00) | ((hex & 0xFF) << 16)
 }
@@ -22,8 +24,9 @@ const PALETTE: [u32; 10] = [
     0xBAB0AC,
 ];
 
-pub fn task_color(index: usize) -> COLORREF {
-    rgb(PALETTE[index % PALETTE.len()])
+/// ラベルファイルで色が指定されていればその色、無ければ登場順の色
+pub fn task_color(task: &TaskTotal) -> COLORREF {
+    rgb(task.rgb.unwrap_or(PALETTE[task.color % PALETTE.len()]))
 }
 
 #[derive(Clone, Copy)]
@@ -34,6 +37,7 @@ pub struct Theme {
     pub subtext: COLORREF,
     pub track: COLORREF,
     pub tick: COLORREF,
+    pub hatch: COLORREF,
     pub separator: COLORREF,
     pub button: COLORREF,
     pub button_hover: COLORREF,
@@ -48,6 +52,7 @@ const LIGHT: Theme = Theme {
     subtext: rgb(0x5F5F5F),
     track: rgb(0xE6E6E6),
     tick: rgb(0xD2D2D2),
+    hatch: rgb(0xB0B0B0),
     separator: rgb(0xE3E3E3),
     button: rgb(0xEBEBEB),
     button_hover: rgb(0xDDDDDD),
@@ -62,6 +67,7 @@ const DARK: Theme = Theme {
     subtext: rgb(0xB3B3B3),
     track: rgb(0x3E3E3E),
     tick: rgb(0x535353),
+    hatch: rgb(0x707070),
     separator: rgb(0x3A3A3A),
     button: rgb(0x3A3A3A),
     button_hover: rgb(0x474747),
@@ -155,6 +161,15 @@ impl Painter {
     pub fn fill(&self, r: RECT, color: COLORREF) {
         unsafe {
             let brush = CreateSolidBrush(color);
+            FillRect(self.hdc, &r, brush);
+            DeleteObject(brush as HGDIOBJ);
+        }
+    }
+
+    /// 斜線の網掛け (背景は透過)
+    pub fn fill_hatch(&self, r: RECT, color: COLORREF) {
+        unsafe {
+            let brush = CreateHatchBrush(HS_BDIAGONAL, color);
             FillRect(self.hdc, &r, brush);
             DeleteObject(brush as HGDIOBJ);
         }
