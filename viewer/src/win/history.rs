@@ -20,7 +20,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use super::gdi::{paint_buffered, rect, task_color, Font, Scale, Theme};
 use super::{bar, hinstance, reload_records, with_state};
-use crate::record::{format_hm, weekday_ja, DaySummary, WORKDAY_SECONDS};
+use crate::record::{format_hm, weekday_ja, DaySummary, IDLE_LABEL, WORKDAY_SECONDS};
 
 pub const CLASS: PCWSTR = w!("WorkingTimeViewer.History");
 
@@ -201,8 +201,13 @@ fn paint(hwnd: HWND) {
 
             let (legend_top, legend_bottom) = (top + s(36), top + s(56));
             let mut x = bar_left;
-            for task in &day.tasks {
-                let label = format!("{} {}", task.name, format_hm(task.duration));
+            let idle = day.idle();
+            let items = day.tasks.iter().map(Some).chain((idle > Duration::zero()).then_some(None));
+            for item in items {
+                let label = match item {
+                    Some(task) => format!("{} {}", task.label, format_hm(task.duration)),
+                    None => format!("{} {}", IDLE_LABEL, format_hm(idle)),
+                };
                 let needed = s(12) + p.text_width(&label, &small_font);
                 let fits = x + needed <= right;
                 if !fits && right - x < s(60) {
@@ -210,7 +215,11 @@ fn paint(hwnd: HWND) {
                     break;
                 }
                 let marker_top = (legend_top + legend_bottom - s(8)) / 2;
-                p.fill_round(rect(x, marker_top, x + s(8), marker_top + s(8)), 2, task_color(task.color));
+                let marker = rect(x, marker_top, x + s(8), marker_top + s(8));
+                match item {
+                    Some(task) => p.fill_round(marker, 2, task_color(task)),
+                    None => bar::draw_idle_marker(p, marker),
+                }
                 let label_rect = rect(x + s(12), legend_top, (x + needed).min(right), legend_bottom);
                 p.text(&label, label_rect, &small_font, t.subtext, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
                 if !fits {

@@ -22,7 +22,7 @@ use windows_sys::Win32::System::SystemInformation::GetTickCount;
 
 use super::gdi::{paint_buffered, rect, task_color, Font, Scale};
 use super::{bar, hinstance, history, reload_records, with_state};
-use crate::record::{format_hm, weekday_ja, DaySummary, WORKDAY_SECONDS};
+use crate::record::{format_hm, weekday_ja, DaySummary, IDLE_LABEL, WORKDAY_SECONDS};
 
 pub const CLASS: PCWSTR = w!("WorkingTimeViewer.Panel");
 
@@ -48,20 +48,21 @@ struct Layout {
     height: i32,
 }
 
-/// 凡例の行数 (多すぎる分は「ほか N 件」の 1 行にまとめる)
-fn legend_rows(task_count: usize) -> usize {
-    if task_count > MAX_ROWS {
-        MAX_ROWS + 1
-    } else {
-        task_count.max(1)
+/// 凡例の行数 (多すぎる分は「ほか N 件」の 1 行にまとめ、8時間に満たなければ「未稼働」の行を足す)
+fn legend_rows(summary: &DaySummary) -> usize {
+    let task_count = summary.tasks.len();
+    if task_count == 0 {
+        return 1;
     }
+    let task_rows = if task_count > MAX_ROWS { MAX_ROWS + 1 } else { task_count };
+    task_rows + (summary.idle() > Duration::zero()) as usize
 }
 
-fn layout(scale: Scale, task_count: usize) -> Layout {
+fn layout(scale: Scale, legend_rows: usize) -> Layout {
     let s = |dip: i32| scale.px(dip);
     let (left, right) = (s(PAD), s(WIDTH - PAD));
     let legend_top = 160;
-    let separator_y = legend_top + legend_rows(task_count) as i32 * ROW_H + 10;
+    let separator_y = legend_top + legend_rows as i32 * ROW_H + 10;
     let button_top = separator_y + 12;
     Layout {
         header: rect(left, s(16), right, s(36)),
@@ -87,7 +88,7 @@ fn snapshot() -> Snapshot {
     with_state(|s| match &s.records {
         Ok(records) => Snapshot {
             today: records.day_summary(now.date_naive(), now),
-            current_task: records.current_task().map(str::to_owned),
+            current_task: records.current_task(now).map(str::to_owned),
             error: None,
         },
         Err(e) => Snapshot {
@@ -169,18 +170,14 @@ fn hide() {
     }
 }
 
-fn today_task_count() -> usize {
-    let now = Local::now();
-    with_state(|s| match &s.records {
-        Ok(records) => records.day_summary(now.date_naive(), now).tasks.len(),
-        Err(_) => 0,
-    })
+fn today_legend_rows() -> usize {
+    legend_rows(&snapshot().today)
 }
 
 /// タスクバーの近く (作業領域の端) に置く
 fn place(hwnd: HWND) {
     let monitor = with_state(|s| s.panel_monitor);
-    let task_count = today_task_count();
+    let rows = today_legend_rows();
     unsafe {
         let mut info: MONITORINFO = zeroed();
         info.cbSize = size_of::<MONITORINFO>() as u32;
@@ -190,7 +187,7 @@ fn place(hwnd: HWND) {
 
         let scale = Scale(dpi_x);
         let width = scale.px(WIDTH);
-        let height = layout(scale, task_count).height;
+        let height = layout(scale, rows).height;
         let margin = scale.px(12);
         let (work, full) = (info.rcWork, info.rcMonitor);
         let x = if work.left > full.left {
@@ -209,7 +206,7 @@ fn place(hwnd: HWND) {
 
 fn button_rect(hwnd: HWND) -> RECT {
     let scale = Scale(unsafe { GetDpiForWindow(hwnd) });
-    layout(scale, today_task_count()).button
+    layout(scale, today_legend_rows()).button
 }
 
 fn point_from_lparam(lparam: LPARAM) -> POINT {
@@ -226,7 +223,7 @@ fn paint(hwnd: HWND) {
     paint_buffered(hwnd, |p, client| {
         let t = p.theme;
         let s = |dip: i32| p.px(dip);
-        let l = layout(p.scale, snap.today.tasks.len());
+        let l = layout(p.scale, legend_rows(&snap.today));
         let title_font = Font::new(p.scale, 14, true);
         let big_font = Font::new(p.scale, 30, true);
         let body_font = Font::new(p.scale, 13, false);
@@ -273,8 +270,20 @@ fn paint(hwnd: HWND) {
         // 横バー
         bar::draw(p, l.bar, &snap.today);
         p.text("0h", l.bar_labels, &small_font, t.subtext, DT_LEFT | DT_VCENTER);
-        p.text("4h", l.bar_labels, &small_font, t.subtext, DT_CENTER | DT_VCENTER);
-        p.text("8h", l.bar_labels, &small_font, t.subtext, DT_RIGHT | DT_VCENTER);
+        if overtime > Duration::zero() {
+            // 右端は総作業時間、点線の下に 8h
+            let end_text = format_hm(total);
+            p.text(&end_text, l.bar_labels, &small_font, t.subtext, DT_RIGHT | DT_VCENTER);
+            let x = bar::x_at(l.bar, &snap.today, WORKDAY_SECONDS);
+            let width = p.text_width("8h", &small_font);
+            let label = RECT { left: x - width / 2, right: x + width - width / 2, ..l.bar_labels };
+            if label.right + s(4) <= l.bar_labels.right - p.text_width(&end_text, &small_font) {
+                p.text("8h", label, &small_font, t.subtext, DT_CENTER | DT_VCENTER);
+            }
+        } else {
+            p.text("4h", l.bar_labels, &small_font, t.subtext, DT_CENTER | DT_VCENTER);
+            p.text("8h", l.bar_labels, &small_font, t.subtext, DT_RIGHT | DT_VCENTER);
+        }
 
         // 凡例
         let row = |i: usize| {
@@ -289,18 +298,29 @@ fn paint(hwnd: HWND) {
         for (i, task) in tasks.iter().take(visible).enumerate() {
             let r = row(i);
             let marker_top = (r.top + r.bottom - s(10)) / 2;
-            p.fill_round(rect(r.left, marker_top, r.left + s(10), marker_top + s(10)), 2, task_color(task.color));
+            p.fill_round(rect(r.left, marker_top, r.left + s(10), marker_top + s(10)), 2, task_color(task));
             let name_rect = rect(r.left + s(18), r.top, r.right - s(64), r.bottom);
-            p.text(&task.name, name_rect, &body_font, t.text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            p.text(&task.label, name_rect, &body_font, t.text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
             p.text(&format_hm(task.duration), r, &body_font, t.subtext, DT_RIGHT | DT_VCENTER);
         }
+        let mut next_row = visible;
         if tasks.len() > visible {
             let others = &tasks[visible..];
             let duration = others.iter().fold(Duration::zero(), |acc, t| acc + t.duration);
-            let r = row(visible);
+            let r = row(next_row);
             let label_rect = RECT { left: r.left + s(18), ..r };
             p.text(&format!("ほか {} 件", others.len()), label_rect, &body_font, t.subtext, DT_LEFT | DT_VCENTER);
             p.text(&format_hm(duration), r, &body_font, t.subtext, DT_RIGHT | DT_VCENTER);
+            next_row += 1;
+        }
+        let idle = snap.today.idle();
+        if !tasks.is_empty() && idle > Duration::zero() {
+            let r = row(next_row);
+            let marker_top = (r.top + r.bottom - s(10)) / 2;
+            bar::draw_idle_marker(p, rect(r.left, marker_top, r.left + s(10), marker_top + s(10)));
+            let label_rect = RECT { left: r.left + s(18), ..r };
+            p.text(IDLE_LABEL, label_rect, &body_font, t.subtext, DT_LEFT | DT_VCENTER);
+            p.text(&format_hm(idle), r, &body_font, t.subtext, DT_RIGHT | DT_VCENTER);
         }
 
         // 履歴ボタン

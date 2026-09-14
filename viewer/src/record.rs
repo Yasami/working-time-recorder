@@ -9,8 +9,31 @@ use std::path::{Path, PathBuf};
 
 pub const UNNAMED_TASK: &str = "(名称なし)";
 
+/// 8時間に満たない分の表示名
+pub const IDLE_LABEL: &str = "未稼働";
+
 /// 横バー全体が表す時間 (8時間)
 pub const WORKDAY_SECONDS: i64 = 8 * 60 * 60;
+
+/// HTML の基本色名
+const NAMED_COLORS: [(&str, u32); 16] = [
+    ("black", 0x000000),
+    ("silver", 0xC0C0C0),
+    ("gray", 0x808080),
+    ("white", 0xFFFFFF),
+    ("maroon", 0x800000),
+    ("red", 0xFF0000),
+    ("purple", 0x800080),
+    ("fuchsia", 0xFF00FF),
+    ("green", 0x008000),
+    ("lime", 0x00FF00),
+    ("olive", 0x808000),
+    ("yellow", 0xFFFF00),
+    ("navy", 0x000080),
+    ("blue", 0x0000FF),
+    ("teal", 0x008080),
+    ("aqua", 0x00FFFF),
+];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventKind {
@@ -24,12 +47,27 @@ pub struct Event {
     pub kind: EventKind,
 }
 
+/// ラベルファイルで定義したタスクの表示名と色
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Label {
+    pub text: Option<String>,
+    /// 0xRRGGBB
+    pub color: Option<u32>,
+}
+
+/// タスク名 → ラベル
+pub type Labels = HashMap<String, Label>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskTotal {
     pub name: String,
+    /// 表示名 (ラベルが無ければタスク名)
+    pub label: String,
     pub duration: Duration,
     /// ファイル内で最初に登場した順番。色分けに使う
     pub color: usize,
+    /// ラベルファイルで指定した色 (0xRRGGBB)
+    pub rgb: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,13 +88,22 @@ impl DaySummary {
             .fold(Duration::zero(), |acc, t| acc + t.duration)
     }
 
-    fn add(&mut self, name: &str, color: usize, duration: Duration) {
+    /// 8時間に満たない分
+    pub fn idle(&self) -> Duration {
+        (Duration::seconds(WORKDAY_SECONDS) - self.total()).max(Duration::zero())
+    }
+
+    fn add(&mut self, name: &str, label: Option<&Label>, color: usize, duration: Duration) {
         match self.tasks.iter_mut().find(|t| t.name == name) {
             Some(task) => task.duration += duration,
             None => self.tasks.push(TaskTotal {
                 name: name.to_string(),
+                label: label
+                    .and_then(|l| l.text.clone())
+                    .unwrap_or_else(|| name.to_string()),
                 duration,
                 color,
+                rgb: label.and_then(|l| l.color),
             }),
         }
     }
@@ -65,26 +112,44 @@ impl DaySummary {
 #[derive(Debug, Clone, Default)]
 pub struct Records {
     events: Vec<Event>,
+    labels: Labels,
 }
 
 impl Records {
     pub fn parse(content: &str) -> Self {
         let mut events: Vec<Event> = content.lines().filter_map(parse_line).collect();
         events.sort_by_key(|e| e.time);
-        Records { events }
+        Records { events, labels: Labels::new() }
     }
 
-    /// 最後の記録が start なら、そのタスク名
-    pub fn current_task(&self) -> Option<&str> {
-        match &self.events.last()?.kind {
-            EventKind::Start(name) => Some(name),
-            EventKind::Stop => None,
+    pub fn with_labels(mut self, labels: Labels) -> Self {
+        self.labels = labels;
+        self
+    }
+
+    /// 最後の記録が今日の start なら、そのタスクの表示名
+    pub fn current_task(&self, now: DateTime<Local>) -> Option<&str> {
+        let last = self.events.last()?;
+        match &last.kind {
+            EventKind::Start(name) if last.time.date_naive() == now.date_naive() => {
+                Some(self.display_name(name))
+            }
+            _ => None,
         }
+    }
+
+    fn display_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.labels
+            .get(name)
+            .and_then(|l| l.text.as_deref())
+            .unwrap_or(name)
     }
 
     /// 日ごとのタスク別作業時間。
     /// start から次の記録 (start / stop) までをそのタスクの作業時間とし、
-    /// 終了していない作業は `now` までとして数える。日をまたぐ作業は日付ごとに分割する。
+    /// 終了していない作業は `now` までとして数える。
+    /// 日をまたぐ作業は、翌日最初の記録が stop ならその時刻まで (日付ごとに分割)、
+    /// それ以外 (翌日以降の start、stop 無し) なら 24:00 で終了したとみなす。
     pub fn daily_summaries(&self, now: DateTime<Local>) -> BTreeMap<NaiveDate, DaySummary> {
         let mut colors: HashMap<&str, usize> = HashMap::new();
         let mut days: BTreeMap<NaiveDate, DaySummary> = BTreeMap::new();
@@ -96,24 +161,24 @@ impl Records {
             let next_color = colors.len();
             let color = *colors.entry(name.as_str()).or_insert(next_color);
 
+            let date = event.time.date_naive();
+            let next_day = date.succ_opt();
             let end = match self.events.get(i + 1) {
-                Some(next) => next.time,
-                None => now.max(event.time),
+                Some(next) if next.kind == EventKind::Stop && Some(next.time.date_naive()) == next_day => next.time,
+                Some(next) => next.time.min(end_of_day(date)),
+                None => now.min(end_of_day(date)),
             };
 
             let mut start = event.time;
             while start < end {
                 let date = start.date_naive();
-                let mut segment_end = end;
-                if let Some(next_day) = date.succ_opt() {
-                    segment_end = segment_end.min(start_of_day(next_day));
-                }
+                let segment_end = end.min(end_of_day(date));
                 if segment_end <= start {
-                    segment_end = end;
+                    break;
                 }
                 days.entry(date)
                     .or_insert_with(|| DaySummary::empty(date))
-                    .add(name, color, segment_end - start);
+                    .add(name, self.labels.get(name), color, segment_end - start);
                 start = segment_end;
             }
         }
@@ -145,6 +210,54 @@ fn parse_line(line: &str) -> Option<Event> {
     Some(Event { time, kind })
 }
 
+/// 1行ごとに「タスク名<TAB>表示名<TAB>カラーコード」
+pub fn parse_labels(content: &str) -> Labels {
+    let mut labels = Labels::new();
+    for line in content.trim_start_matches('\u{feff}').lines() {
+        let mut columns = line.trim_end_matches('\r').split('\t');
+        let task = columns.next().unwrap_or("").trim();
+        if task.is_empty() {
+            continue;
+        }
+        let text = columns
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let color = columns.next().and_then(parse_color);
+        labels.insert(task.to_string(), Label { text, color });
+    }
+    labels
+}
+
+/// `#RRGGBB`、`#RGB`、HTML の基本色名を 0xRRGGBB にする
+pub fn parse_color(s: &str) -> Option<u32> {
+    let s = s.trim();
+    if let Some(hex) = s.strip_prefix('#') {
+        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        return match hex.len() {
+            6 => u32::from_str_radix(hex, 16).ok(),
+            3 => {
+                let v = u32::from_str_radix(hex, 16).ok()?;
+                let (r, g, b) = ((v >> 8) & 0xF, (v >> 4) & 0xF, v & 0xF);
+                Some(((r * 0x11) << 16) | ((g * 0x11) << 8) | (b * 0x11))
+            }
+            _ => None,
+        };
+    }
+    NAMED_COLORS
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(s))
+        .map(|(_, rgb)| *rgb)
+}
+
+/// その日の 24:00 (翌日の 0:00)
+fn end_of_day(date: NaiveDate) -> DateTime<Local> {
+    start_of_day(date.succ_opt().unwrap_or(date))
+}
+
 fn start_of_day(date: NaiveDate) -> DateTime<Local> {
     let midnight = date.and_time(NaiveTime::MIN);
     Local
@@ -163,15 +276,26 @@ pub fn record_path() -> PathBuf {
     }
 }
 
+/// 記録ファイルの横に置く `<記録ファイル名>.labels`
+pub fn labels_path(record_path: &Path) -> PathBuf {
+    let mut path = record_path.as_os_str().to_owned();
+    path.push(".labels");
+    PathBuf::from(path)
+}
+
 pub fn load(path: &Path) -> Result<Records, String> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Records::parse(&String::from_utf8_lossy(&bytes))),
-        Err(e) if e.kind() == ErrorKind::NotFound => Err(format!(
-            "記録ファイルが見つかりません: {}",
-            path.display()
-        )),
-        Err(e) => Err(format!("記録ファイルを読み込めません: {}", e)),
-    }
+    let records = match fs::read(path) {
+        Ok(bytes) => Records::parse(&String::from_utf8_lossy(&bytes)),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Err(format!("記録ファイルが見つかりません: {}", path.display()))
+        }
+        Err(e) => return Err(format!("記録ファイルを読み込めません: {}", e)),
+    };
+    // ラベルファイルは無くてもよい
+    let labels = fs::read(labels_path(path))
+        .map(|bytes| parse_labels(&String::from_utf8_lossy(&bytes)))
+        .unwrap_or_default();
+    Ok(records.with_labels(labels))
 }
 
 /// `h:mm` 形式
@@ -237,6 +361,7 @@ mod tests {
         let summary = Records::parse(&content).day_summary(date(14), at(14, 18, 0));
         assert_eq!(durations(&summary), vec![("設計", 165), ("レビュー", 30)]);
         assert_eq!(summary.total().num_minutes(), 195);
+        assert_eq!(summary.idle().num_minutes(), 480 - 195);
     }
 
     #[test]
@@ -245,15 +370,41 @@ mod tests {
         let records = Records::parse(&content);
         let summary = records.day_summary(date(14), at(14, 9, 45));
         assert_eq!(durations(&summary), vec![("a", 45)]);
-        assert_eq!(records.current_task(), Some("a"));
+        assert_eq!(records.current_task(at(14, 9, 45)), Some("a"));
     }
 
     #[test]
-    fn test_split_at_midnight() {
-        let content = [start(at(14, 23, 0), "a"), stop(at(15, 1, 30))].concat();
-        let days = Records::parse(&content).daily_summaries(at(15, 12, 0));
+    fn test_start_on_next_day_ends_previous_task_at_midnight() {
+        let content = [start(at(14, 22, 0), "a"), start(at(15, 9, 0), "b")].concat();
+        let days = Records::parse(&content).daily_summaries(at(15, 10, 0));
+        assert_eq!(durations(&days[&date(14)]), vec![("a", 120)]);
+        assert_eq!(durations(&days[&date(15)]), vec![("b", 60)]);
+    }
+
+    #[test]
+    fn test_stop_first_on_next_day_is_split_at_midnight() {
+        let content = [start(at(14, 23, 0), "a"), stop(at(15, 1, 30)), start(at(15, 9, 0), "b")].concat();
+        let days = Records::parse(&content).daily_summaries(at(15, 10, 0));
         assert_eq!(durations(&days[&date(14)]), vec![("a", 60)]);
-        assert_eq!(durations(&days[&date(15)]), vec![("a", 90)]);
+        assert_eq!(durations(&days[&date(15)]), vec![("a", 90), ("b", 60)]);
+    }
+
+    #[test]
+    fn test_stop_two_days_later_ends_at_midnight() {
+        let content = [start(at(14, 23, 0), "a"), stop(at(16, 1, 0))].concat();
+        let days = Records::parse(&content).daily_summaries(at(16, 10, 0));
+        assert_eq!(durations(&days[&date(14)]), vec![("a", 60)]);
+        assert_eq!(days.len(), 1);
+    }
+
+    #[test]
+    fn test_task_started_yesterday_is_not_running() {
+        let content = start(at(14, 22, 0), "a");
+        let records = Records::parse(&content);
+        let days = records.daily_summaries(at(15, 9, 0));
+        assert_eq!(durations(&days[&date(14)]), vec![("a", 120)]);
+        assert!(!days.contains_key(&date(15)));
+        assert_eq!(records.current_task(at(15, 9, 0)), None);
     }
 
     #[test]
@@ -274,7 +425,7 @@ mod tests {
             .map(|t| (t.name.as_str(), t.color))
             .collect();
         assert_eq!(colors, vec![("b", 1)]);
-        assert_eq!(records.current_task(), None);
+        assert_eq!(records.current_task(at(15, 12, 0)), None);
     }
 
     #[test]
@@ -289,6 +440,50 @@ mod tests {
         let content = format!("{}\tstart\ta\r\n{}\tstop\t\r\n", at(14, 9, 0).to_rfc3339(), at(14, 9, 20).to_rfc3339());
         let summary = Records::parse(&content).day_summary(date(14), at(14, 12, 0));
         assert_eq!(durations(&summary), vec![("a", 20)]);
+    }
+
+    #[test]
+    fn test_parse_labels() {
+        let labels = parse_labels("\u{feff}a\t設計作業\t#FF8800\r\nb\t\tnavy\nc\tレビュー\n\n\td\t#000\ne\tE\tinvalid\n");
+        assert_eq!(labels.len(), 4);
+        assert_eq!(labels["a"], Label { text: Some("設計作業".into()), color: Some(0xFF8800) });
+        assert_eq!(labels["b"], Label { text: None, color: Some(0x000080) });
+        assert_eq!(labels["c"], Label { text: Some("レビュー".into()), color: None });
+        assert_eq!(labels["e"], Label { text: Some("E".into()), color: None });
+    }
+
+    #[test]
+    fn test_parse_color() {
+        assert_eq!(parse_color("#1a2B3c"), Some(0x1A2B3C));
+        assert_eq!(parse_color(" #abc "), Some(0xAABBCC));
+        assert_eq!(parse_color("Red"), Some(0xFF0000));
+        assert_eq!(parse_color("#12345"), None);
+        assert_eq!(parse_color("#+12345"), None);
+        assert_eq!(parse_color("123456"), None);
+        assert_eq!(parse_color(""), None);
+    }
+
+    #[test]
+    fn test_labels_are_applied() {
+        let content = [start(at(14, 9, 0), "a"), start(at(14, 10, 0), "b")].concat();
+        let labels = parse_labels("a\t設計\t#FF0000\n");
+        let records = Records::parse(&content).with_labels(labels);
+        let summary = records.day_summary(date(14), at(14, 11, 0));
+        let shown: Vec<(&str, Option<u32>)> = summary
+            .tasks
+            .iter()
+            .map(|t| (t.label.as_str(), t.rgb))
+            .collect();
+        assert_eq!(shown, vec![("設計", Some(0xFF0000)), ("b", None)]);
+        assert_eq!(records.current_task(at(14, 11, 0)), Some("b"));
+    }
+
+    #[test]
+    fn test_labels_path() {
+        assert_eq!(
+            labels_path(Path::new("dir/working_time_record.txt")),
+            PathBuf::from("dir/working_time_record.txt.labels")
+        );
     }
 
     #[test]
