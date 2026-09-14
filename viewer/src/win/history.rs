@@ -80,6 +80,15 @@ pub fn open() {
     }
 }
 
+/// 開いていれば読み込み済みの記録で描き直す
+pub fn refresh() {
+    let hwnd = with_state(|s| s.history);
+    if !hwnd.is_null() {
+        update_scrollbar(hwnd);
+        unsafe { InvalidateRect(hwnd, null(), 0) };
+    }
+}
+
 fn apply_title_bar_theme(hwnd: HWND) {
     let dark = Theme::current().dark as i32;
     unsafe {

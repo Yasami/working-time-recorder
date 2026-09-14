@@ -6,9 +6,11 @@ mod history;
 mod panel;
 
 use std::cell::RefCell;
+use std::fs;
 use std::mem::{size_of, zeroed};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
+use std::time::{Instant, SystemTime};
 
 use windows_sys::core::{w, PCWSTR};
 use windows_sys::Win32::Foundation::{
@@ -27,10 +29,13 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+use crate::config::{self, Config};
 use crate::record::{self, Records};
 
 const HOST_CLASS: PCWSTR = w!("WorkingTimeViewer.Host");
 const WM_TRAY: u32 = WM_APP + 1;
+const TIMER_WATCH: usize = 1;
+const WATCH_INTERVAL_MS: u32 = 1_000;
 const TRAY_UID: u32 = 1;
 const NIN_SELECT: u32 = WM_USER;
 const NIN_KEYSELECT: u32 = WM_USER + 1;
@@ -45,12 +50,33 @@ pub struct State {
     pub history: HWND,
     pub record_path: PathBuf,
     pub records: Result<Records, String>,
+    pub config: Config,
+    pub config_error: Option<String>,
+    /// 最後に読み込んだときの記録ファイル・設定ファイルの状態
+    pub record_stamp: Option<FileStamp>,
+    pub config_stamp: Option<FileStamp>,
+    /// 記録ファイルが最後に変化した (または自動でパネルを表示した) 時刻
+    pub last_change: Instant,
     pub tray_icon: HICON,
     pub taskbar_created: u32,
     pub panel_monitor: HMONITOR,
     pub panel_hover: bool,
     pub panel_hidden_at: u32,
+    /// パネルを自動で表示中 (まだ操作されていない)
+    pub panel_auto: bool,
     pub history_scroll: i32,
+}
+
+/// ファイルの変化を調べるための更新日時とサイズ
+#[derive(Clone, Copy, PartialEq)]
+pub struct FileStamp {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let metadata = fs::metadata(path).ok()?;
+    Some(FileStamp { modified: metadata.modified().ok(), len: metadata.len() })
 }
 
 thread_local! {
@@ -64,10 +90,43 @@ pub fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
     STATE.with(|state| f(state.borrow_mut().as_mut().expect("state is not initialized")))
 }
 
+/// 記録ファイルと設定ファイルを読み直す
 pub fn reload_records() {
     let path = with_state(|s| s.record_path.clone());
-    let records = record::load(&path);
-    with_state(|s| s.records = records);
+    let config_path = config::config_path(&path);
+    // 読み込み中に変化しても取りこぼさないよう、先に状態を控える
+    let record_stamp = file_stamp(&path);
+    let config_stamp = file_stamp(&config_path);
+    let (config, config_error) = match config::load(&config_path) {
+        Ok(config) => (config, None),
+        Err(e) => (Config::default(), Some(e)),
+    };
+    let records = record::load(&path).map(|r| r.with_labels(config.labels.clone()));
+    with_state(|s| {
+        s.records = records;
+        s.config = config;
+        s.config_error = config_error;
+        s.record_stamp = record_stamp;
+        s.config_stamp = config_stamp;
+    });
+}
+
+/// 記録ファイルが変化したら、または前回の変化から設定した時間が経ったら、パネルを自動で表示する
+fn watch_files() {
+    let (path, record_stamp, config_stamp, last_change, popup_interval) = with_state(|s| {
+        (s.record_path.clone(), s.record_stamp, s.config_stamp, s.last_change, s.config.popup_interval)
+    });
+    let record_changed = file_stamp(&path) != record_stamp;
+    let config_changed = file_stamp(&config::config_path(&path)) != config_stamp;
+    if record_changed || config_changed {
+        reload_records();
+        panel::refresh();
+        history::refresh();
+    }
+    if record_changed || popup_interval.is_some_and(|interval| last_change.elapsed() >= interval) {
+        with_state(|s| s.last_change = Instant::now());
+        panel::show_auto();
+    }
 }
 
 pub fn hinstance() -> windows_sys::Win32::Foundation::HINSTANCE {
@@ -95,11 +154,17 @@ pub fn run() {
                 history: null_mut(),
                 record_path: record::record_path(),
                 records: Ok(Records::default()),
+                config: Config::default(),
+                config_error: None,
+                record_stamp: None,
+                config_stamp: None,
+                last_change: Instant::now(),
                 tray_icon: small_icon,
                 taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
                 panel_monitor: null_mut(),
                 panel_hover: false,
                 panel_hidden_at: 0,
+                panel_auto: false,
                 history_scroll: 0,
             })
         });
@@ -129,6 +194,10 @@ pub fn run() {
         });
 
         add_tray_icon();
+
+        // 起動時点の状態を基準に、以降の変化を監視する
+        reload_records();
+        SetTimer(host, TIMER_WATCH, WATCH_INTERVAL_MS, None);
 
         let mut msg: MSG = zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
@@ -246,7 +315,14 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
             }
             0
         }
+        WM_TIMER => {
+            if wparam == TIMER_WATCH {
+                watch_files();
+            }
+            0
+        }
         WM_DESTROY => {
+            KillTimer(hwnd, TIMER_WATCH);
             PostQuitMessage(0);
             0
         }
