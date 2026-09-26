@@ -1,5 +1,6 @@
 use chrono::{Local, SecondsFormat};
 use std::env;
+use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -8,6 +9,7 @@ use std::process::ExitCode;
 const TASK_NAME_NOT_PROVIDED_MSG: &str = "タスク名が提供されていません。";
 const TASK_NAME_CONTAINS_NEWLINE_MSG: &str = "タスク名に改行を含めることはできません。";
 const FILENAME_NOT_PROVIDED_MSG: &str = "ファイル名が指定されていません";
+const HOME_DIR_NOT_FOUND_MSG: &str = "ホームディレクトリが見つかりません。-f または環境変数 WORKING_TIME_RECORD で記録ファイルを指定してください。";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -70,17 +72,31 @@ fn handle_stop_command(args: &[String]) -> Result<(), String> {
 
 // 共通の引数処理関数
 fn parse_arguments(args: &[String]) -> Result<(PathBuf, Vec<String>), String> {
-    let mut file_path = get_working_time_record_path();
+    parse_arguments_with(args, get_working_time_record_path)
+}
+
+/// `-f` が指定されなかったときだけ `default_path` で既定のパスを求める
+fn parse_arguments_with(
+    args: &[String],
+    default_path: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<(PathBuf, Vec<String>), String> {
+    let mut file_path = None;
     let mut remaining_args = Vec::new();
     let mut iter = args.iter().skip(2);
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "-f" | "--file" => file_path = iter.next().ok_or(FILENAME_NOT_PROVIDED_MSG)?.into(),
+            "-f" | "--file" => {
+                file_path = Some(iter.next().ok_or(FILENAME_NOT_PROVIDED_MSG)?.into());
+            }
             _ => remaining_args.push(arg.clone()),
         }
     }
 
+    let file_path = match file_path {
+        Some(path) => path,
+        None => default_path()?,
+    };
     Ok((file_path, remaining_args))
 }
 
@@ -88,13 +104,23 @@ fn get_current_time() -> String {
     Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)
 }
 
-fn get_working_time_record_path() -> PathBuf {
-    match env::var_os("WORKING_TIME_RECORD") {
-        Some(path) => PathBuf::from(path),
-        None => env::home_dir()
-            .expect("ホームディレクトリが見つかりません")
-            .join("working_time_record.txt"),
+fn get_working_time_record_path() -> Result<PathBuf, String> {
+    resolve_record_path(env::var_os("WORKING_TIME_RECORD"), env::home_dir())
+}
+
+/// 環境変数 WORKING_TIME_RECORD の値、未設定ならホームディレクトリの working_time_record.txt
+fn resolve_record_path(
+    env_value: Option<OsString>,
+    home_dir: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = env_value {
+        return Ok(PathBuf::from(path));
     }
+    // 空のパスだとカレントディレクトリの相対パスになってしまうので、見つからない扱いにする
+    home_dir
+        .filter(|home| !home.as_os_str().is_empty())
+        .map(|home| home.join("working_time_record.txt"))
+        .ok_or_else(|| HOME_DIR_NOT_FOUND_MSG.to_string())
 }
 
 fn write_to_file(file_path: &Path, content: &str) -> Result<(), String> {
@@ -265,6 +291,52 @@ mod tests {
         let (file_path, remaining_args) = parse_arguments(&args).unwrap();
         assert_eq!(file_path, Path::new("custom_file.txt"));
         assert_eq!(remaining_args, vec!["test_task".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_arguments_file_option_skips_default_path() {
+        let args = vec![
+            "program_name".to_string(),
+            "stop".to_string(),
+            "-f".to_string(),
+            "custom_file.txt".to_string(),
+        ];
+        // ホームディレクトリが見つからなくても、-f を指定すれば記録できる
+        let (file_path, _) =
+            parse_arguments_with(&args, || Err(HOME_DIR_NOT_FOUND_MSG.to_string())).unwrap();
+        assert_eq!(file_path, Path::new("custom_file.txt"));
+    }
+
+    #[test]
+    fn test_parse_arguments_default_path_error() {
+        let args = vec!["program_name".to_string(), "stop".to_string()];
+        let result = parse_arguments_with(&args, || Err(HOME_DIR_NOT_FOUND_MSG.to_string()));
+        assert_eq!(result.unwrap_err(), HOME_DIR_NOT_FOUND_MSG);
+    }
+
+    #[test]
+    fn test_resolve_record_path_prefers_env_value() {
+        let path = resolve_record_path(Some("env_record.txt".into()), None).unwrap();
+        assert_eq!(path, Path::new("env_record.txt"));
+    }
+
+    #[test]
+    fn test_resolve_record_path_uses_home_dir() {
+        let home = PathBuf::from("home");
+        let path = resolve_record_path(None, Some(home.clone())).unwrap();
+        assert_eq!(path, home.join("working_time_record.txt"));
+    }
+
+    #[test]
+    fn test_resolve_record_path_without_home_dir() {
+        assert_eq!(
+            resolve_record_path(None, None).unwrap_err(),
+            HOME_DIR_NOT_FOUND_MSG
+        );
+        assert_eq!(
+            resolve_record_path(None, Some(PathBuf::new())).unwrap_err(),
+            HOME_DIR_NOT_FOUND_MSG
+        );
     }
 
     #[test]

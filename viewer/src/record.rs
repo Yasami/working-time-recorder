@@ -3,6 +3,7 @@
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone};
 use std::collections::{BTreeMap, HashMap};
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -254,14 +255,26 @@ fn start_of_day(date: NaiveDate) -> DateTime<Local> {
         .unwrap_or_else(|| Local.from_utc_datetime(&midnight))
 }
 
+const HOME_DIR_NOT_FOUND_MSG: &str = "ホームディレクトリが見つかりません。環境変数 WORKING_TIME_RECORD で記録ファイルを指定してください";
+
 /// recorder と同じ規則で記録ファイルのパスを決める
-pub fn record_path() -> PathBuf {
-    match env::var_os("WORKING_TIME_RECORD") {
-        Some(path) => PathBuf::from(path),
-        None => env::home_dir()
-            .unwrap_or_default()
-            .join("working_time_record.txt"),
+pub fn record_path() -> Result<PathBuf, String> {
+    resolve_record_path(env::var_os("WORKING_TIME_RECORD"), env::home_dir())
+}
+
+/// 環境変数 WORKING_TIME_RECORD の値、未設定ならホームディレクトリの working_time_record.txt
+fn resolve_record_path(
+    env_value: Option<OsString>,
+    home_dir: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = env_value {
+        return Ok(PathBuf::from(path));
     }
+    // 空のパスだとカレントディレクトリの相対パスになってしまうので、見つからない扱いにする
+    home_dir
+        .filter(|home| !home.as_os_str().is_empty())
+        .map(|home| home.join("working_time_record.txt"))
+        .ok_or_else(|| HOME_DIR_NOT_FOUND_MSG.to_string())
 }
 
 pub fn load(path: &Path) -> Result<Records, String> {
@@ -457,6 +470,31 @@ mod tests {
             .collect();
         assert_eq!(shown, vec![("設計", Some(0xFF0000)), ("b", None)]);
         assert_eq!(records.current_task(at(14, 11, 0)), Some("b"));
+    }
+
+    #[test]
+    fn test_resolve_record_path_prefers_env_value() {
+        let path = resolve_record_path(Some("env_record.txt".into()), None).unwrap();
+        assert_eq!(path, Path::new("env_record.txt"));
+    }
+
+    #[test]
+    fn test_resolve_record_path_uses_home_dir() {
+        let home = PathBuf::from("home");
+        let path = resolve_record_path(None, Some(home.clone())).unwrap();
+        assert_eq!(path, home.join("working_time_record.txt"));
+    }
+
+    #[test]
+    fn test_resolve_record_path_without_home_dir() {
+        assert_eq!(
+            resolve_record_path(None, None).unwrap_err(),
+            HOME_DIR_NOT_FOUND_MSG
+        );
+        assert_eq!(
+            resolve_record_path(None, Some(PathBuf::new())).unwrap_err(),
+            HOME_DIR_NOT_FOUND_MSG
+        );
     }
 
     #[test]
