@@ -3,7 +3,9 @@
 mod bar;
 mod gdi;
 mod history;
+mod http;
 mod panel;
+mod updater;
 
 use std::cell::RefCell;
 use std::fs;
@@ -23,14 +25,16 @@ use windows_sys::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
-    NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NIM_SETVERSION, NIN_BALLOONUSERCLICK, NOTIFY_ICON_INFOTIP_FLAGS, NOTIFYICON_VERSION_4,
+    NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::{PCWSTR, w};
 
 use crate::config::{self, Config};
 use crate::record::{self, Records};
+use crate::update::Version;
 
 const HOST_CLASS: PCWSTR = w!("WorkingTimeViewer.Host");
 const WM_TRAY: u32 = WM_APP + 1;
@@ -43,6 +47,7 @@ const NIN_KEYSELECT: u32 = WM_USER + 1;
 const ID_MENU_TODAY: usize = 1;
 const ID_MENU_HISTORY: usize = 2;
 const ID_MENU_EXIT: usize = 3;
+const ID_MENU_UPDATE: usize = 4;
 
 pub struct State {
     pub host: HWND,
@@ -66,6 +71,7 @@ pub struct State {
     /// パネルを自動で表示中 (まだ操作されていない)
     pub panel_auto: bool,
     pub history_scroll: i32,
+    pub update: updater::UpdateState,
 }
 
 /// ファイルの変化を調べるための更新日時とサイズ
@@ -194,6 +200,7 @@ pub fn run() {
                 panel_hidden_at: 0,
                 panel_auto: false,
                 history_scroll: 0,
+                update: updater::UpdateState::new(),
             })
         });
 
@@ -274,7 +281,9 @@ fn tray_data() -> NOTIFYICONDATAW {
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     data.uCallbackMessage = WM_TRAY;
     data.hIcon = icon;
-    let tip: Vec<u16> = "作業時間ビューワー".encode_utf16().collect();
+    let tip: Vec<u16> = format!("作業時間ビューワー {}", Version::current())
+        .encode_utf16()
+        .collect();
     let len = tip.len().min(data.szTip.len() - 1);
     data.szTip[..len].copy_from_slice(&tip[..len]);
     data
@@ -289,6 +298,24 @@ fn add_tray_icon() {
     }
 }
 
+/// 通知領域のアイコンから通知 (バルーン) を出す
+fn show_balloon(title: &str, text: &str, flags: NOTIFY_ICON_INFOTIP_FLAGS) {
+    let mut data = tray_data();
+    data.uFlags = NIF_INFO;
+    data.dwInfoFlags = flags;
+    for (dest, src) in [
+        (&mut data.szInfoTitle[..], title),
+        (&mut data.szInfo[..], text),
+    ] {
+        let src: Vec<u16> = src.encode_utf16().collect();
+        let len = src.len().min(dest.len() - 1);
+        dest[..len].copy_from_slice(&src[..len]);
+    }
+    unsafe {
+        Shell_NotifyIconW(NIM_MODIFY, &data);
+    }
+}
+
 fn remove_tray_icon() {
     let data = tray_data();
     unsafe {
@@ -299,8 +326,27 @@ fn remove_tray_icon() {
 fn show_tray_menu(host: HWND) {
     unsafe {
         let menu = CreatePopupMenu();
+        // 実行中のバージョン (選べない項目として表示するだけ)
+        let version: Vec<u16> = format!("バージョン {}", Version::current())
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, version.as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, null());
         AppendMenuW(menu, MF_STRING, ID_MENU_TODAY, w!("今日の作業時間"));
         AppendMenuW(menu, MF_STRING, ID_MENU_HISTORY, w!("履歴を表示"));
+        let (update_text, update_enabled) = updater::menu_item();
+        let update_text: Vec<u16> = update_text.encode_utf16().chain(Some(0)).collect();
+        AppendMenuW(
+            menu,
+            if update_enabled {
+                MF_STRING
+            } else {
+                MF_STRING | MF_GRAYED
+            },
+            ID_MENU_UPDATE,
+            update_text.as_ptr(),
+        );
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         AppendMenuW(menu, MF_STRING, ID_MENU_EXIT, w!("終了"));
 
@@ -322,6 +368,17 @@ fn show_tray_menu(host: HWND) {
     }
 }
 
+/// 開いているウィンドウを閉じて終了する
+fn quit(host: HWND) {
+    let history = with_state(|s| s.history);
+    unsafe {
+        if !history.is_null() {
+            DestroyWindow(history);
+        }
+        DestroyWindow(host);
+    }
+}
+
 unsafe extern "system" fn host_proc(
     hwnd: HWND,
     msg: u32,
@@ -334,6 +391,7 @@ unsafe extern "system" fn host_proc(
                 match (lparam & 0xFFFF) as u32 {
                     NIN_SELECT | NIN_KEYSELECT => panel::toggle(),
                     WM_CONTEXTMENU => show_tray_menu(hwnd),
+                    NIN_BALLOONUSERCLICK => updater::on_balloon_click(),
                     _ => {}
                 }
                 0
@@ -342,13 +400,8 @@ unsafe extern "system" fn host_proc(
                 match wparam & 0xFFFF {
                     ID_MENU_TODAY => panel::show(),
                     ID_MENU_HISTORY => history::open(),
-                    ID_MENU_EXIT => {
-                        let history = with_state(|s| s.history);
-                        if !history.is_null() {
-                            DestroyWindow(history);
-                        }
-                        DestroyWindow(hwnd);
-                    }
+                    ID_MENU_UPDATE => updater::on_menu(),
+                    ID_MENU_EXIT => quit(hwnd),
                     _ => {}
                 }
                 0
@@ -356,7 +409,21 @@ unsafe extern "system" fn host_proc(
             WM_TIMER => {
                 if wparam == TIMER_WATCH {
                     watch_files();
+                    updater::tick();
                 }
+                0
+            }
+            updater::WM_UPDATE_CHECKED => {
+                updater::on_checked(lparam);
+                0
+            }
+            updater::WM_UPDATE_DOWNLOADED => {
+                updater::on_downloaded(lparam);
+                0
+            }
+            // インストーラーが更新・アンインストールの前に送ってくる
+            WM_CLOSE => {
+                quit(hwnd);
                 0
             }
             WM_DESTROY => {

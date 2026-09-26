@@ -35,3 +35,21 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+      # .iss の誤りを PR で見つけるため、デバッグビルドからインストーラーを作る
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages[0].version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DBuildDir=..\target\debug" installer\working-time-recorder.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # 更新の確認を試せるよう、作ったインストーラーを PR からダウンロードできるようにする
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          # zip にせず exe をそのまま上げる (成果物の名前は exe のファイル名になる)
+          archive: false
+          path: target/installer/*-setup.exe
+          if-no-files-found: error

@@ -4,6 +4,8 @@
 mod config;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod record;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod update;
 #[cfg(windows)]
 mod win;
 
