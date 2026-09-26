@@ -1,11 +1,11 @@
 [package]
 name = "working-time-recorder"
-version = "0.2.0"
-authors = ["Masahide Sakamaki <yasami@falys.com>"]
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-chrono = "0.4.39"
-dirs = "5.0.1"
+chrono.workspace = true

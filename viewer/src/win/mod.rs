@@ -7,27 +7,27 @@ mod panel;
 
 use std::cell::RefCell;
 use std::fs;
-use std::mem::{size_of, zeroed};
+use std::mem::zeroed;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::time::{Instant, SystemTime};
 
-use windows_sys::core::{w, PCWSTR};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::HMONITOR;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::{
-    GetDpiForSystem, GetSystemMetricsForDpi, SetProcessDpiAwarenessContext,
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem, GetSystemMetricsForDpi,
+    SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
+    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
+    NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
+use windows_sys::core::{PCWSTR, w};
 
 use crate::config::{self, Config};
 use crate::record::{self, Records};
@@ -76,7 +76,10 @@ pub struct FileStamp {
 
 fn file_stamp(path: &Path) -> Option<FileStamp> {
     let metadata = fs::metadata(path).ok()?;
-    Some(FileStamp { modified: metadata.modified().ok(), len: metadata.len() })
+    Some(FileStamp {
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+    })
 }
 
 thread_local! {
@@ -87,7 +90,12 @@ thread_local! {
 /// クロージャ内でメッセージを送る Win32 API (ShowWindow など) を呼ぶと
 /// ウィンドウプロシージャが再入して二重借用になるので、値の読み書きだけにすること。
 pub fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
-    STATE.with(|state| f(state.borrow_mut().as_mut().expect("state is not initialized")))
+    STATE.with(|state| {
+        f(state
+            .borrow_mut()
+            .as_mut()
+            .expect("state is not initialized"))
+    })
 }
 
 /// 記録ファイルと設定ファイルを読み直す
@@ -114,7 +122,13 @@ pub fn reload_records() {
 /// 記録ファイルが変化したら、または前回の変化から設定した時間が経ったら、パネルを自動で表示する
 fn watch_files() {
     let (path, record_stamp, config_stamp, last_change, popup_interval) = with_state(|s| {
-        (s.record_path.clone(), s.record_stamp, s.config_stamp, s.last_change, s.config.popup_interval)
+        (
+            s.record_path.clone(),
+            s.record_stamp,
+            s.config_stamp,
+            s.last_change,
+            s.config.popup_interval,
+        )
     });
     let record_changed = file_stamp(&path) != record_stamp;
     let config_changed = file_stamp(&config::config_path(&path)) != config_stamp;
@@ -212,27 +226,29 @@ pub fn run() {
     }
 }
 
-unsafe fn register_class(
+fn register_class(
     name: PCWSTR,
     proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
     small_icon: HICON,
     large_icon: HICON,
 ) {
-    let class = WNDCLASSEXW {
-        cbSize: size_of::<WNDCLASSEXW>() as u32,
-        style: CS_HREDRAW | CS_VREDRAW,
-        lpfnWndProc: Some(proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: hinstance(),
-        hIcon: large_icon,
-        hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-        hbrBackground: null_mut(),
-        lpszMenuName: null(),
-        lpszClassName: name,
-        hIconSm: small_icon,
-    };
-    RegisterClassExW(&class);
+    unsafe {
+        let class = WNDCLASSEXW {
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: hinstance(),
+            hIcon: large_icon,
+            hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+            hbrBackground: null_mut(),
+            lpszMenuName: null(),
+            lpszClassName: name,
+            hIconSm: small_icon,
+        };
+        RegisterClassExW(&class);
+    }
 }
 
 fn tray_data() -> NOTIFYICONDATAW {
@@ -266,73 +282,82 @@ fn remove_tray_icon() {
     }
 }
 
-unsafe fn show_tray_menu(host: HWND) {
-    let menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, ID_MENU_TODAY, w!("今日の作業時間"));
-    AppendMenuW(menu, MF_STRING, ID_MENU_HISTORY, w!("履歴を表示"));
-    AppendMenuW(menu, MF_SEPARATOR, 0, null());
-    AppendMenuW(menu, MF_STRING, ID_MENU_EXIT, w!("終了"));
+fn show_tray_menu(host: HWND) {
+    unsafe {
+        let menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING, ID_MENU_TODAY, w!("今日の作業時間"));
+        AppendMenuW(menu, MF_STRING, ID_MENU_HISTORY, w!("履歴を表示"));
+        AppendMenuW(menu, MF_SEPARATOR, 0, null());
+        AppendMenuW(menu, MF_STRING, ID_MENU_EXIT, w!("終了"));
 
-    let mut point: POINT = zeroed();
-    GetCursorPos(&mut point);
-    // メニュー外クリックで閉じるために必要
-    SetForegroundWindow(host);
-    TrackPopupMenu(
-        menu,
-        TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_RIGHTALIGN,
-        point.x,
-        point.y,
-        0,
-        host,
-        null(),
-    );
-    PostMessageW(host, WM_NULL, 0, 0);
-    DestroyMenu(menu);
+        let mut point: POINT = zeroed();
+        GetCursorPos(&mut point);
+        // メニュー外クリックで閉じるために必要
+        SetForegroundWindow(host);
+        TrackPopupMenu(
+            menu,
+            TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_RIGHTALIGN,
+            point.x,
+            point.y,
+            0,
+            host,
+            null(),
+        );
+        PostMessageW(host, WM_NULL, 0, 0);
+        DestroyMenu(menu);
+    }
 }
 
-unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    match msg {
-        WM_TRAY => {
-            match (lparam & 0xFFFF) as u32 {
-                NIN_SELECT | NIN_KEYSELECT => panel::toggle(),
-                WM_CONTEXTMENU => show_tray_menu(hwnd),
-                _ => {}
-            }
-            0
-        }
-        WM_COMMAND => {
-            match wparam & 0xFFFF {
-                ID_MENU_TODAY => panel::show(),
-                ID_MENU_HISTORY => history::open(),
-                ID_MENU_EXIT => {
-                    let history = with_state(|s| s.history);
-                    if !history.is_null() {
-                        DestroyWindow(history);
-                    }
-                    DestroyWindow(hwnd);
+unsafe extern "system" fn host_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_TRAY => {
+                match (lparam & 0xFFFF) as u32 {
+                    NIN_SELECT | NIN_KEYSELECT => panel::toggle(),
+                    WM_CONTEXTMENU => show_tray_menu(hwnd),
+                    _ => {}
                 }
-                _ => {}
+                0
             }
-            0
-        }
-        WM_TIMER => {
-            if wparam == TIMER_WATCH {
-                watch_files();
+            WM_COMMAND => {
+                match wparam & 0xFFFF {
+                    ID_MENU_TODAY => panel::show(),
+                    ID_MENU_HISTORY => history::open(),
+                    ID_MENU_EXIT => {
+                        let history = with_state(|s| s.history);
+                        if !history.is_null() {
+                            DestroyWindow(history);
+                        }
+                        DestroyWindow(hwnd);
+                    }
+                    _ => {}
+                }
+                0
             }
-            0
-        }
-        WM_DESTROY => {
-            KillTimer(hwnd, TIMER_WATCH);
-            PostQuitMessage(0);
-            0
-        }
-        _ => {
-            // エクスプローラーが再起動したらアイコンを登録し直す
-            if msg != 0 && msg == with_state(|s| s.taskbar_created) {
-                add_tray_icon();
-                return 0;
+            WM_TIMER => {
+                if wparam == TIMER_WATCH {
+                    watch_files();
+                }
+                0
             }
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+            WM_DESTROY => {
+                KillTimer(hwnd, TIMER_WATCH);
+                PostQuitMessage(0);
+                0
+            }
+            _ => {
+                // エクスプローラーが再起動したらアイコンを登録し直す
+                if msg != 0 && msg == with_state(|s| s.taskbar_created) {
+                    add_tray_icon();
+                    return 0;
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
         }
     }
 }

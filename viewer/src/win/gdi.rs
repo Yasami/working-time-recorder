@@ -1,17 +1,16 @@
 //! GDI 描画ヘルパー、配色、アイコン生成
 
-use std::ffi::c_void;
-use std::mem::{size_of, zeroed};
+use std::mem::zeroed;
 use std::ptr::null_mut;
 
-use windows_sys::core::w;
 use windows_sys::Win32::Foundation::{COLORREF, ERROR_SUCCESS, HWND, RECT, SIZE};
 use windows_sys::Win32::Graphics::Gdi::*;
-use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateIconFromResourceEx, GetClientRect, HICON, LR_DEFAULTCOLOR,
 };
+use windows_sys::core::w;
 
 use crate::record::TaskTotal;
 
@@ -77,7 +76,7 @@ const DARK: Theme = Theme {
 
 impl Theme {
     /// Windows のアプリモード (ライト / ダーク) に合わせる
-    pub fn current() -> Theme {
+    pub fn current() -> Self {
         let mut value: u32 = 1;
         let mut size = size_of::<u32>() as u32;
         let status = unsafe {
@@ -87,7 +86,7 @@ impl Theme {
                 w!("AppsUseLightTheme"),
                 RRF_RT_REG_DWORD,
                 null_mut(),
-                &mut value as *mut u32 as *mut c_void,
+                (&raw mut value).cast(),
                 &mut size,
             )
         };
@@ -110,15 +109,20 @@ impl Scale {
 }
 
 pub fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
-    RECT { left, top, right, bottom }
+    RECT {
+        left,
+        top,
+        right,
+        bottom,
+    }
 }
 
 pub struct Font(HFONT);
 
 impl Font {
-    pub fn new(scale: Scale, size_dip: i32, bold: bool) -> Font {
+    pub fn new(scale: Scale, size_dip: i32, bold: bool) -> Self {
         let weight = if bold { FW_SEMIBOLD } else { FW_NORMAL };
-        Font(unsafe {
+        Self(unsafe {
             CreateFontW(
                 -scale.px(size_dip),
                 0,
@@ -182,7 +186,15 @@ impl Painter {
             let old_brush = SelectObject(self.hdc, brush as HGDIOBJ);
             let old_pen = SelectObject(self.hdc, GetStockObject(NULL_PEN));
             // NULL_PEN だと右端・下端が 1px 欠けるので広げる
-            RoundRect(self.hdc, r.left, r.top, r.right + 1, r.bottom + 1, diameter, diameter);
+            RoundRect(
+                self.hdc,
+                r.left,
+                r.top,
+                r.right + 1,
+                r.bottom + 1,
+                diameter,
+                diameter,
+            );
             SelectObject(self.hdc, old_pen);
             SelectObject(self.hdc, old_brush);
             DeleteObject(brush as HGDIOBJ);
@@ -193,7 +205,8 @@ impl Painter {
     pub fn clip_round(&self, r: RECT, radius_dip: i32, draw: impl FnOnce()) {
         let diameter = self.px(radius_dip * 2);
         unsafe {
-            let region = CreateRoundRectRgn(r.left, r.top, r.right + 1, r.bottom + 1, diameter, diameter);
+            let region =
+                CreateRoundRectRgn(r.left, r.top, r.right + 1, r.bottom + 1, diameter, diameter);
             SelectClipRgn(self.hdc, region);
             draw();
             SelectClipRgn(self.hdc, null_mut());
@@ -277,7 +290,12 @@ pub fn create_app_icon(size: i32) -> HICON {
     let radius = size_f * 0.22;
     let (bar_left, bar_right) = (size_f * 0.17, size_f * 0.83);
     let (bar_top, bar_bottom) = (size_f * 0.36, size_f * 0.64);
-    let segments = [(0.45, 0xF28E2B), (0.72, 0x59A14F), (0.88, 0xEDC948), (1.0, 0x7F8C8D)];
+    let segments = [
+        (0.45, 0xF28E2B),
+        (0.72, 0x59A14F),
+        (0.88, 0xEDC948),
+        (1.0, 0x7F8C8D),
+    ];
 
     // ピクセルは下の行から
     for y in (0..s).rev() {
@@ -289,7 +307,10 @@ pub fn create_app_icon(size: i32) -> HICON {
                 0x00000000
             } else if px >= bar_left && px < bar_right && py >= bar_top && py < bar_bottom {
                 let fraction = (px - bar_left) / (bar_right - bar_left);
-                let color = segments.iter().find(|(end, _)| fraction < *end).map_or(0x7F8C8D, |s| s.1);
+                let color = segments
+                    .iter()
+                    .find(|(end, _)| fraction < *end)
+                    .map_or(0x7F8C8D, |s| s.1);
                 0xFF000000 | color
             } else {
                 0xFF34495E

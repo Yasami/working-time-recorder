@@ -2,7 +2,7 @@
 
 use windows_sys::Win32::Foundation::RECT;
 
-use super::gdi::{rect, task_color, Painter};
+use super::gdi::{Painter, rect, task_color};
 use crate::record::{DaySummary, WORKDAY_SECONDS};
 
 /// バー全体が表す秒数
