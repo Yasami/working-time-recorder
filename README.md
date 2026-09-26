@@ -49,6 +49,9 @@ PATH と自動起動の設定も元に戻します。記録ファイルと設定
 cargo build --release
 ```
 
+CRT (C ランタイム) は静的リンクするので (`.cargo/config.toml`)、実行ファイルは Visual C++ 再頒布可能パッケージが無い PC でも動きます。
+環境変数 `RUSTFLAGS` を設定するとこの設定が無視されるので注意してください。
+
 インストーラーは [Inno Setup 6](https://jrsoftware.org/isinfo.php) で作ります (`target\installer` に出力します)。
 
 ```powershell
