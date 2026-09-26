@@ -57,6 +57,17 @@ cargo build --release
 リリースは `vX.Y.Z` 形式のタグを push すると GitHub Actions が作ります
 (タグと `Cargo.toml` のバージョンが一致している必要があります)。
 
+### 更新の確認を試す
+
+デバッグビルドのビューワーは、環境変数 `WORKING_TIME_VIEWER_UPDATE_REPO` (`owner/repo`) を設定すると、
+そのリポジトリのリリースを使って更新を確認します (リリースビルドはこの環境変数を読みません)。
+PR の CI が作るインストーラー (Actions の成果物 `installer`) はデバッグビルドなので、次のように試せます。
+
+1. テスト用のリポジトリにリリースを作り、インストーラー (名前が `-setup.exe` で終わるもの) を添付する
+2. `setx WORKING_TIME_VIEWER_UPDATE_REPO <owner>/<repo>` を実行してから、ビューワーを起動し直す
+3. タグのバージョンを変えながら、メニューの「更新を確認」や通知のクリックで動作を確かめる
+4. 終わったら `reg delete HKCU\Environment /v WORKING_TIME_VIEWER_UPDATE_REPO /f` で環境変数を消す
+
 ## recorder
 
 ```bash

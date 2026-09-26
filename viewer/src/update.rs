@@ -4,13 +4,52 @@ use std::fmt;
 
 use serde::Deserialize;
 
-/// 最新リリースを返す GitHub API (下書きとプレリリースは含まれない)
-pub const LATEST_RELEASE_URL: &str =
-    "https://api.github.com/repos/Yasami/working-time-recorder/releases/latest";
+/// リリースを公開している GitHub のリポジトリ
+const REPOSITORY: &str = "Yasami/working-time-recorder";
+
+/// 更新の確認を試すため、リリースを取りに行くリポジトリ (`owner/repo`) を差し替える環境変数。
+/// デバッグビルドでだけ読む
+#[cfg(debug_assertions)]
+const REPOSITORY_ENV: &str = "WORKING_TIME_VIEWER_UPDATE_REPO";
+
+/// リリースを取りに行くリポジトリ
+fn repository() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(repository) = std::env::var(REPOSITORY_ENV)
+        && is_valid_repository(&repository)
+    {
+        return repository;
+    }
+    REPOSITORY.to_string()
+}
+
+/// `owner/repo` の形か (URL に埋め込むので、使える文字だけかも調べる)
+// リリースビルドでは環境変数を読まないので、テストからしか使わない
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+fn is_valid_repository(repository: &str) -> bool {
+    let valid_part = |part: &str| {
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    matches!(repository.split_once('/'), Some((owner, repo)) if valid_part(owner) && valid_part(repo))
+}
+
+/// 最新リリースを返す GitHub API の URL (下書きとプレリリースは含まれない)
+pub fn latest_release_url() -> String {
+    format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        repository()
+    )
+}
 
 /// 自動で更新できなかったときに開く、最新リリースのページ
-pub const LATEST_RELEASE_PAGE: &str =
-    "https://github.com/Yasami/working-time-recorder/releases/latest";
+pub fn latest_release_page() -> String {
+    format!("https://github.com/{}/releases/latest", repository())
+}
 
 /// リリースの添付ファイルのうち、この名前で終わるものをインストーラーとみなす
 const INSTALLER_SUFFIX: &str = "-setup.exe";
@@ -232,6 +271,19 @@ mod tests {
         );
         // JSON でない
         assert!(parse_release("Not Found").is_err());
+    }
+
+    #[test]
+    fn test_is_valid_repository() {
+        assert!(is_valid_repository("Yasami/working-time-recorder"));
+        assert!(is_valid_repository("a.b/c_d"));
+        assert!(!is_valid_repository("Yasami"));
+        assert!(!is_valid_repository("Yasami/"));
+        assert!(!is_valid_repository("/repo"));
+        assert!(!is_valid_repository("a/b/c"));
+        assert!(!is_valid_repository("../repo"));
+        assert!(!is_valid_repository("a/b?x=1"));
+        assert!(!is_valid_repository("a/b#c"));
     }
 
     #[test]

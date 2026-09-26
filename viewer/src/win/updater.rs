@@ -141,7 +141,7 @@ fn start_check(manual: bool) {
         return;
     };
     thread::spawn(move || {
-        let result = http::get(update::LATEST_RELEASE_URL, API_HEADERS)
+        let result = http::get(&update::latest_release_url(), API_HEADERS)
             .and_then(|body| update::parse_release(&String::from_utf8_lossy(&body)));
         post_result(host, WM_UPDATE_CHECKED, result);
     });
@@ -325,7 +325,7 @@ fn offer_release_page(host: HWND, error: &str) {
             MB_YESNO | MB_ICONWARNING,
         ) == IDYES
         {
-            let url = wide(update::LATEST_RELEASE_PAGE);
+            let url = wide(&update::latest_release_page());
             ShellExecuteW(
                 host,
                 w!("open"),

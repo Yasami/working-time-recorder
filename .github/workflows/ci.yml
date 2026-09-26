@@ -44,3 +44,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DBuildDir=..\target\debug" installer\working-time-recorder.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # 更新の確認を試せるよう、作ったインストーラーを PR からダウンロードできるようにする
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: target/installer/*-setup.exe
+          if-no-files-found: error
