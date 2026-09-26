@@ -27,6 +27,10 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
+      # テスト実行 (失敗したらリリースしない)
+      - name: Test
+        run: cargo test --release
+
       # ビルド実行
       - name: Build
         run: cargo build --release
