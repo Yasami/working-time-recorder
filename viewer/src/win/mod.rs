@@ -48,7 +48,8 @@ pub struct State {
     pub host: HWND,
     pub panel: HWND,
     pub history: HWND,
-    pub record_path: PathBuf,
+    /// ホームディレクトリが見つからないなどでパスが決まらなければ Err
+    pub record_path: Result<PathBuf, String>,
     pub records: Result<Records, String>,
     pub config: Config,
     pub config_error: Option<String>,
@@ -100,7 +101,14 @@ pub fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
 
 /// 記録ファイルと設定ファイルを読み直す
 pub fn reload_records() {
-    let path = with_state(|s| s.record_path.clone());
+    let path = match with_state(|s| s.record_path.clone()) {
+        Ok(path) => path,
+        Err(e) => {
+            // 設定ファイルの場所も記録ファイルから決まるので、どちらも読めない
+            with_state(|s| s.records = Err(e));
+            return;
+        }
+    };
     let config_path = config::config_path(&path);
     // 読み込み中に変化しても取りこぼさないよう、先に状態を控える
     let record_stamp = file_stamp(&path);
@@ -130,8 +138,14 @@ fn watch_files() {
             s.config.popup_interval,
         )
     });
-    let record_changed = file_stamp(&path) != record_stamp;
-    let config_changed = file_stamp(&config::config_path(&path)) != config_stamp;
+    let (record_changed, config_changed) = match &path {
+        Ok(path) => (
+            file_stamp(path) != record_stamp,
+            file_stamp(&config::config_path(path)) != config_stamp,
+        ),
+        // パスが決まらなければ監視するファイルも無い
+        Err(_) => (false, false),
+    };
     if record_changed || config_changed {
         reload_records();
         panel::refresh();
