@@ -4,8 +4,7 @@
 mod config;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod record;
-// TODO: win::updater から使うようになったら、ほかと同じ cfg_attr(not(windows), allow(dead_code)) にする
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod update;
 #[cfg(windows)]
 mod win;

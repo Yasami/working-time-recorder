@@ -22,8 +22,6 @@ pub struct Config {
     /// 自動で表示したパネルを消すまでの時間。None なら消さない
     pub auto_hide: Option<Duration>,
     /// 更新を自動で確認する
-    // TODO: win::updater から読むようになったら allow を外す
-    #[allow(dead_code)]
     pub check_update: bool,
     pub labels: Labels,
 }
