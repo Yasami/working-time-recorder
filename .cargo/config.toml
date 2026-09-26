@@ -1,0 +1,4 @@
+# CRT (C ランタイム) を静的リンクし、Visual C++ 再頒布可能パッケージが無い PC でも動くようにする。
+# 環境変数 RUSTFLAGS を設定すると、ここの rustflags は使われなくなるので注意。
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

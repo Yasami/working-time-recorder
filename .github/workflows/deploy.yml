@@ -48,6 +48,19 @@ jobs:
       - name: Build
         run: cargo build --release
 
+      # CRT が静的リンクされているか (VCRUNTIME140.dll に依存していないか) を確かめる。
+      # 環境変数 RUSTFLAGS を設定すると .cargo/config.toml の設定が無視されるため
+      - name: Check static CRT
+        shell: pwsh
+        run: |
+          foreach ($exe in "target/release/working-time-recorder.exe", "target/release/working-time-viewer.exe") {
+            $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($exe))
+            if ($text -match "(?i)vcruntime140") {
+              Write-Error "$exe が VCRUNTIME140.dll に依存しています (CRT が静的リンクされていません)"
+              exit 1
+            }
+          }
+
       # インストーラーを作成 (windows-latest には Inno Setup 6 が入っている)
       - name: Build installer
         shell: pwsh
