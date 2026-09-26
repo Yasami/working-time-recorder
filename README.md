@@ -16,9 +16,13 @@ cargo build --release
 ## recorder
 
 ```bash
-working-time-recorder start <task_name> [-f <file>]
+working-time-recorder start <task_name>... [-f <file>]
 working-time-recorder stop [-f <file>]
 ```
+
+タスク名に複数の単語を渡すと、スペースで連結して1つのタスク名として記録します
+(`start 設計 レビュー` は「設計 レビュー」)。`-f <file>` はタスク名の前後や途中のどこに置いても構いません。
+記録ファイルは1行1レコードのため、改行を含むタスク名はエラーになります。
 
 記録ファイルは環境変数 `WORKING_TIME_RECORD`、未設定ならホームディレクトリの `working_time_record.txt` です。
 
