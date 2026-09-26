@@ -63,6 +63,10 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WorkingTimeViewer"; ValueData: """{app}\{#ViewerExe}"""; Flags: uninsdeletevalue; Tasks: autostart
 
+[UninstallDelete]
+; ビューワーが更新のときにダウンロードしたインストーラー
+Type: filesandordirs; Name: "{localappdata}\working-time-recorder"
+
 [Run]
 ; 更新 (/SILENT) の後にもビューワーを起動し直すため、skipifsilent は付けない
 Filename: "{app}\{#ViewerExe}"; Description: "ビューワーを起動する"; Flags: nowait postinstall

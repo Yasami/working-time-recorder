@@ -2,17 +2,22 @@
 //!
 //! 通信は別スレッドで行い、結果は `PostMessageW` でホストウィンドウ (UI スレッド) に送る。
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::ErrorKind;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
-use std::ptr::null;
+use std::ptr::{null, null_mut};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
-use windows_sys::Win32::UI::Shell::{NIIF_ERROR, NIIF_INFO, ShellExecuteW};
+use windows_sys::Win32::System::Com::CoTaskMemFree;
+use windows_sys::Win32::UI::Shell::{
+    FOLDERID_LocalAppData, KF_FLAG_DEFAULT, NIIF_ERROR, NIIF_INFO, SHGetKnownFolderPath,
+    ShellExecuteW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     IDYES, MB_ICONWARNING, MB_YESNO, MessageBoxW, PostMessageW, SW_SHOWNORMAL, WM_APP,
 };
@@ -36,8 +41,9 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// GitHub API に付けるヘッダー
 const API_HEADERS: &str = "Accept: application/vnd.github+json\r\nX-GitHub-Api-Version: 2022-11-28";
 
-/// ダウンロードしたインストーラーを置く、%TEMP% の下のフォルダー名
-const DOWNLOAD_DIR: &str = "working-time-recorder-update";
+/// ダウンロードしたインストーラーを置く、%LOCALAPPDATA% の下のフォルダー
+/// (アンインストール時にインストーラーが消す)
+const DOWNLOAD_DIR: &str = r"working-time-recorder\update";
 
 const APP_TITLE: &str = "作業時間ビューワー";
 
@@ -222,7 +228,8 @@ fn download(release: &Release) -> Result<PathBuf, String> {
                 .to_string(),
         );
     }
-    let dir = std::env::temp_dir().join(DOWNLOAD_DIR);
+    // 環境変数 (TEMP など) で場所が変わらないよう、既知フォルダーから決める
+    let dir = local_app_data()?.join(DOWNLOAD_DIR);
     // 前回の更新で残ったファイルを消す
     match fs::remove_dir_all(&dir) {
         Ok(()) => {}
@@ -236,6 +243,33 @@ fn download(release: &Release) -> Result<PathBuf, String> {
     ));
     fs::write(&path, &body).map_err(|e| format!("インストーラーを保存できません: {e}"))?;
     Ok(path)
+}
+
+/// %LOCALAPPDATA% の場所
+fn local_app_data() -> Result<PathBuf, String> {
+    let mut ptr = null_mut();
+    let hr = unsafe {
+        SHGetKnownFolderPath(
+            &FOLDERID_LocalAppData,
+            KF_FLAG_DEFAULT as u32,
+            null_mut(),
+            &mut ptr,
+        )
+    };
+    let path = (hr >= 0).then(|| {
+        let len = (0..).take_while(|&i| unsafe { *ptr.add(i) } != 0).count();
+        PathBuf::from(OsString::from_wide(unsafe {
+            std::slice::from_raw_parts(ptr, len)
+        }))
+    });
+    // 失敗したときも解放する (NULL なら何もしない)
+    unsafe { CoTaskMemFree(ptr.cast()) };
+    path.ok_or_else(|| {
+        format!(
+            "ローカルアプリケーションデータのフォルダーが見つかりません (エラー 0x{:08X})",
+            hr as u32
+        )
+    })
 }
 
 fn sha256(data: &[u8]) -> Result<[u8; 32], String> {
