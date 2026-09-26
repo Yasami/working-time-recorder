@@ -21,6 +21,10 @@ pub struct Config {
     pub popup_interval: Option<Duration>,
     /// 自動で表示したパネルを消すまでの時間。None なら消さない
     pub auto_hide: Option<Duration>,
+    /// 更新を自動で確認する
+    // TODO: win::updater から読むようになったら allow を外す
+    #[allow(dead_code)]
+    pub check_update: bool,
     pub labels: Labels,
 }
 
@@ -29,6 +33,7 @@ impl Default for Config {
         Self {
             popup_interval: positive_duration(DEFAULT_POPUP_INTERVAL_MINUTES * 60.0),
             auto_hide: positive_duration(DEFAULT_AUTO_HIDE_SECONDS),
+            check_update: true,
             labels: Labels::new(),
         }
     }
@@ -39,6 +44,7 @@ impl Default for Config {
 struct RawConfig {
     popup_interval_minutes: Option<f64>,
     auto_hide_seconds: Option<f64>,
+    check_update: Option<bool>,
     #[serde(default)]
     labels: HashMap<String, RawLabel>,
 }
@@ -84,6 +90,7 @@ pub fn parse(content: &str) -> Result<Config, String> {
                 * 60.0,
         ),
         auto_hide: positive_duration(raw.auto_hide_seconds.unwrap_or(DEFAULT_AUTO_HIDE_SECONDS)),
+        check_update: raw.check_update.unwrap_or(true),
         labels,
     })
 }
@@ -123,6 +130,7 @@ mod tests {
             r##"{
                 "popup_interval_minutes": 30,
                 "auto_hide_seconds": 5.5,
+                "check_update": false,
                 "labels": {
                     "a": { "label": "設計作業", "color": "#FF8800" },
                     "b": { "color": "navy" },
@@ -134,6 +142,7 @@ mod tests {
         .unwrap();
         assert_eq!(config.popup_interval, Some(Duration::from_secs(30 * 60)));
         assert_eq!(config.auto_hide, Some(Duration::from_millis(5500)));
+        assert!(!config.check_update);
         assert_eq!(config.labels.len(), 4);
         assert_eq!(
             config.labels["a"],
@@ -176,6 +185,7 @@ mod tests {
         assert!(parse("").is_err());
         assert!(parse(r#"{ "auto_hide_seconds": "10" }"#).is_err());
         assert!(parse(r#"{ "unknown": 1 }"#).is_err());
+        assert!(parse(r#"{ "check_update": "no" }"#).is_err());
         assert!(parse(r#"{ "labels": { "a": { "color": "invalid" } } }"#).is_err());
     }
 

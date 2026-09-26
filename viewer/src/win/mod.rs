@@ -3,6 +3,9 @@
 mod bar;
 mod gdi;
 mod history;
+// TODO: win::updater から使うようになったら allow を外す
+#[allow(dead_code)]
+mod http;
 mod panel;
 
 use std::cell::RefCell;
