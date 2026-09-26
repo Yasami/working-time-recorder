@@ -390,14 +390,14 @@ dependencies = [
 
 [[package]]
 name = "working-time-recorder"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "working-time-viewer"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
