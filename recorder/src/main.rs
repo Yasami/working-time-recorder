@@ -138,11 +138,41 @@ mod tests {
     use super::*;
     use std::fs;
 
-    // テストは並列に実行されるので、テストごとに別のファイルを使う
-    fn setup_test_file(test_name: &str) -> String {
-        let test_file = format!("test_working_time_record_{test_name}.txt");
-        let _ = fs::remove_file(&test_file);
-        test_file
+    /// 一時ディレクトリの下に置くテスト用の記録ファイル。drop したときに消す
+    struct TestFile {
+        path: PathBuf,
+    }
+
+    impl TestFile {
+        // テストは並列に実行され、別の cargo test と同時に動くこともあるので、
+        // テスト名とプロセス ID でテストごとに一意なファイル名にする
+        fn new(test_name: &str) -> Self {
+            let path = env::temp_dir().join(format!(
+                "working_time_record_test_{}_{test_name}.txt",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&path);
+            Self { path }
+        }
+
+        /// `-f` に渡す引数
+        fn arg(&self) -> String {
+            self.path
+                .to_str()
+                .expect("一時ディレクトリのパスが UTF-8 ではありません")
+                .to_string()
+        }
+
+        fn read(&self) -> String {
+            fs::read_to_string(&self.path).unwrap()
+        }
+    }
+
+    // assert で panic したときも消えるよう、drop で消す
+    impl Drop for TestFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.path);
+        }
     }
 
     #[test]
@@ -169,28 +199,26 @@ mod tests {
 
     #[test]
     fn test_handle_start_command() {
-        let test_file = setup_test_file("start");
+        let test_file = TestFile::new("start");
         let args = vec![
             "program_name".to_string(),
             "start".to_string(),
             "test_task".to_string(),
             "-f".to_string(),
-            test_file.clone(),
+            test_file.arg(),
         ];
         assert!(handle_start_command(&args).is_ok());
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert!(content.contains("start\ttest_task"));
-        fs::remove_file(test_file).unwrap();
+        assert!(test_file.read().contains("start\ttest_task"));
     }
 
     #[test]
     fn test_handle_start_command_missing_task_name() {
-        let test_file = setup_test_file("missing_task_name");
+        let test_file = TestFile::new("missing_task_name");
         let args = vec![
             "program_name".to_string(),
             "start".to_string(),
             "-f".to_string(),
-            test_file.clone(),
+            test_file.arg(),
         ];
         let result = handle_start_command(&args);
         assert!(result.is_err());
@@ -199,43 +227,41 @@ mod tests {
 
     #[test]
     fn test_handle_start_command_multiple_words() {
-        let test_file = setup_test_file("multiple_words");
+        let test_file = TestFile::new("multiple_words");
         let args = vec![
             "program_name".to_string(),
             "start".to_string(),
             "設計".to_string(),
             "レビュー".to_string(),
             "-f".to_string(),
-            test_file.clone(),
+            test_file.arg(),
         ];
         assert!(handle_start_command(&args).is_ok());
-        let content = fs::read_to_string(&test_file).unwrap();
+        let content = test_file.read();
         assert_eq!(content.lines().count(), 1);
         assert!(content.ends_with("\tstart\t設計 レビュー\n"));
-        fs::remove_file(test_file).unwrap();
     }
 
     #[test]
     fn test_handle_start_command_file_option_in_middle() {
-        let test_file = setup_test_file("file_option_in_middle");
+        let test_file = TestFile::new("file_option_in_middle");
         let args = vec![
             "program_name".to_string(),
             "start".to_string(),
             "設計".to_string(),
             "-f".to_string(),
-            test_file.clone(),
+            test_file.arg(),
             "レビュー".to_string(),
         ];
         assert!(handle_start_command(&args).is_ok());
-        let content = fs::read_to_string(&test_file).unwrap();
+        let content = test_file.read();
         assert_eq!(content.lines().count(), 1);
         assert!(content.ends_with("\tstart\t設計 レビュー\n"));
-        fs::remove_file(test_file).unwrap();
     }
 
     #[test]
     fn test_handle_start_command_rejects_newline() {
-        let test_file = setup_test_file("rejects_newline");
+        let test_file = TestFile::new("rejects_newline");
         for task_name in ["設計\nレビュー", "設計\r\nレビュー", "設計\rレビュー"]
         {
             let args = vec![
@@ -243,28 +269,26 @@ mod tests {
                 "start".to_string(),
                 task_name.to_string(),
                 "-f".to_string(),
-                test_file.clone(),
+                test_file.arg(),
             ];
             let result = handle_start_command(&args);
             assert_eq!(result.unwrap_err(), TASK_NAME_CONTAINS_NEWLINE_MSG);
         }
         // 拒否したときは記録ファイルに何も書き込まない
-        assert!(!Path::new(&test_file).exists());
+        assert!(!test_file.path.exists());
     }
 
     #[test]
     fn test_handle_stop_command() {
-        let test_file = setup_test_file("stop");
+        let test_file = TestFile::new("stop");
         let args = vec![
             "program_name".to_string(),
             "stop".to_string(),
             "-f".to_string(),
-            test_file.clone(),
+            test_file.arg(),
         ];
         assert!(handle_stop_command(&args).is_ok());
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert!(content.contains("stop"));
-        fs::remove_file(test_file).unwrap();
+        assert!(test_file.read().contains("stop"));
     }
 
     #[test]
@@ -274,8 +298,11 @@ mod tests {
             "start".to_string(),
             "test_task".to_string(),
         ];
-        let (file_path, remaining_args) = parse_arguments(&args).unwrap();
-        assert!(file_path.ends_with("working_time_record.txt"));
+        // 環境変数 WORKING_TIME_RECORD やホームディレクトリに左右されないよう、既定のパスは引数で渡す。
+        // 既定のパスの決め方は resolve_record_path のテストで確認する
+        let (file_path, remaining_args) =
+            parse_arguments_with(&args, || Ok(PathBuf::from("default_record.txt"))).unwrap();
+        assert_eq!(file_path, Path::new("default_record.txt"));
         assert_eq!(remaining_args, vec!["test_task".to_string()]);
     }
 
@@ -316,6 +343,10 @@ mod tests {
 
     #[test]
     fn test_resolve_record_path_prefers_env_value() {
+        let path = resolve_record_path(Some("env_record.txt".into()), Some(PathBuf::from("home")))
+            .unwrap();
+        assert_eq!(path, Path::new("env_record.txt"));
+        // ホームディレクトリが見つからなくても、環境変数があれば記録できる
         let path = resolve_record_path(Some("env_record.txt".into()), None).unwrap();
         assert_eq!(path, Path::new("env_record.txt"));
     }
