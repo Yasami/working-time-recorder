@@ -222,7 +222,15 @@ fn download(release: &Release) -> Result<PathBuf, String> {
                 .to_string(),
         );
     }
-    let dir = std::env::temp_dir().join(DOWNLOAD_DIR);
+    let temp_dir = std::env::temp_dir();
+    let temp_dir = temp_dir
+        .canonicalize()
+        .map_err(|e| format!("一時フォルダーのパスを解決できません: {e}"))?;
+    let dir = temp_dir.join(DOWNLOAD_DIR);
+    let parent = dir.parent().ok_or_else(|| "一時フォルダーの親パスを取得できません。".to_string())?;
+    if parent != temp_dir {
+        return Err("一時フォルダーのパスが不正です。".to_string());
+    }
     // 前回の更新で残ったファイルを消す
     match fs::remove_dir_all(&dir) {
         Ok(()) => {}
