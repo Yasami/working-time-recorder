@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const TASK_NAME_NOT_PROVIDED_MSG: &str = "タスク名が提供されていません。";
+const TASK_NAME_CONTAINS_NEWLINE_MSG: &str = "タスク名に改行を含めることはできません。";
 const FILENAME_NOT_PROVIDED_MSG: &str = "ファイル名が指定されていません";
 
 fn main() -> ExitCode {
@@ -37,16 +38,23 @@ fn execute(args: &[String]) -> Result<(), String> {
 
 fn display_help() {
     println!("Usage:");
-    println!("  start <task_name> [-f <file>]    Start tracking time for a task.");
-    println!("  stop                             Stop tracking time.");
-    println!("  help                             Display this help message.");
+    println!("  start <task_name>... [-f <file>]    Start tracking time for a task.");
+    println!("                                      Multiple words are joined with spaces.");
+    println!("  stop [-f <file>]                    Stop tracking time.");
+    println!("  help                                Display this help message.");
 }
 
 fn handle_start_command(args: &[String]) -> Result<(), String> {
     let (file_path, remaining_args) = parse_arguments(args)?;
-    let Some(task_name) = remaining_args.first() else {
+    if remaining_args.is_empty() {
         return Err(TASK_NAME_NOT_PROVIDED_MSG.into());
-    };
+    }
+
+    let task_name = remaining_args.join(" ");
+    // 記録ファイルは1行1レコードなので、改行を含むタスク名は記録を壊さないよう拒否する
+    if task_name.contains(['\r', '\n']) {
+        return Err(TASK_NAME_CONTAINS_NEWLINE_MSG.into());
+    }
 
     let timestamp = get_current_time();
     let record = format!("{timestamp}\tstart\t{task_name}\n");
@@ -161,6 +169,61 @@ mod tests {
         let result = handle_start_command(&args);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), TASK_NAME_NOT_PROVIDED_MSG);
+    }
+
+    #[test]
+    fn test_handle_start_command_multiple_words() {
+        let test_file = setup_test_file("multiple_words");
+        let args = vec![
+            "program_name".to_string(),
+            "start".to_string(),
+            "設計".to_string(),
+            "レビュー".to_string(),
+            "-f".to_string(),
+            test_file.clone(),
+        ];
+        assert!(handle_start_command(&args).is_ok());
+        let content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(content.lines().count(), 1);
+        assert!(content.ends_with("\tstart\t設計 レビュー\n"));
+        fs::remove_file(test_file).unwrap();
+    }
+
+    #[test]
+    fn test_handle_start_command_file_option_in_middle() {
+        let test_file = setup_test_file("file_option_in_middle");
+        let args = vec![
+            "program_name".to_string(),
+            "start".to_string(),
+            "設計".to_string(),
+            "-f".to_string(),
+            test_file.clone(),
+            "レビュー".to_string(),
+        ];
+        assert!(handle_start_command(&args).is_ok());
+        let content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(content.lines().count(), 1);
+        assert!(content.ends_with("\tstart\t設計 レビュー\n"));
+        fs::remove_file(test_file).unwrap();
+    }
+
+    #[test]
+    fn test_handle_start_command_rejects_newline() {
+        let test_file = setup_test_file("rejects_newline");
+        for task_name in ["設計\nレビュー", "設計\r\nレビュー", "設計\rレビュー"]
+        {
+            let args = vec![
+                "program_name".to_string(),
+                "start".to_string(),
+                task_name.to_string(),
+                "-f".to_string(),
+                test_file.clone(),
+            ];
+            let result = handle_start_command(&args);
+            assert_eq!(result.unwrap_err(), TASK_NAME_CONTAINS_NEWLINE_MSG);
+        }
+        // 拒否したときは記録ファイルに何も書き込まない
+        assert!(!Path::new(&test_file).exists());
     }
 
     #[test]
