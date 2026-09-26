@@ -217,7 +217,7 @@ unsafe fn register_class(
     proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
     small_icon: HICON,
     large_icon: HICON,
-) {
+) { unsafe {
     let class = WNDCLASSEXW {
         cbSize: size_of::<WNDCLASSEXW>() as u32,
         style: CS_HREDRAW | CS_VREDRAW,
@@ -233,7 +233,7 @@ unsafe fn register_class(
         hIconSm: small_icon,
     };
     RegisterClassExW(&class);
-}
+}}
 
 fn tray_data() -> NOTIFYICONDATAW {
     let (host, icon) = with_state(|s| (s.host, s.tray_icon));
@@ -266,7 +266,7 @@ fn remove_tray_icon() {
     }
 }
 
-unsafe fn show_tray_menu(host: HWND) {
+unsafe fn show_tray_menu(host: HWND) { unsafe {
     let menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, ID_MENU_TODAY, w!("今日の作業時間"));
     AppendMenuW(menu, MF_STRING, ID_MENU_HISTORY, w!("履歴を表示"));
@@ -288,9 +288,9 @@ unsafe fn show_tray_menu(host: HWND) {
     );
     PostMessageW(host, WM_NULL, 0, 0);
     DestroyMenu(menu);
-}
+}}
 
-unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT { unsafe {
     match msg {
         WM_TRAY => {
             match (lparam & 0xFFFF) as u32 {
@@ -335,4 +335,4 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
     }
-}
+}}

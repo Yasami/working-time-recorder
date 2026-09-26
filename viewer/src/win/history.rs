@@ -240,7 +240,7 @@ fn paint(hwnd: HWND) {
     });
 }
 
-pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT { unsafe {
     match msg {
         WM_PAINT => {
             paint(hwnd);
@@ -335,4 +335,4 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-}
+}}

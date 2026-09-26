@@ -178,7 +178,7 @@ pub fn show_auto() {
     }
 }
 
-unsafe fn open(hwnd: HWND, monitor: HMONITOR, show_cmd: SHOW_WINDOW_CMD) {
+unsafe fn open(hwnd: HWND, monitor: HMONITOR, show_cmd: SHOW_WINDOW_CMD) { unsafe {
     with_state(|s| {
         s.panel_monitor = monitor;
         s.panel_hover = false;
@@ -187,7 +187,7 @@ unsafe fn open(hwnd: HWND, monitor: HMONITOR, show_cmd: SHOW_WINDOW_CMD) {
     ShowWindow(hwnd, show_cmd);
     InvalidateRect(hwnd, null(), 0);
     SetTimer(hwnd, TIMER_REFRESH, REFRESH_INTERVAL_MS, None);
-}
+}}
 
 /// 自動で表示したパネルを、自分で開いたものとして扱う
 fn stop_auto_hide(hwnd: HWND) {
@@ -388,7 +388,7 @@ fn paint(hwnd: HWND) {
     });
 }
 
-pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT { unsafe {
     match msg {
         WM_PAINT => {
             paint(hwnd);
@@ -462,4 +462,4 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-}
+}}
