@@ -10,7 +10,9 @@ push する前に、必ず以下を実行してください。
 2. `cargo clippy --all-targets` で警告が出ないことを確認する
 3. `cargo test` が通ることを確認する
 
-CI でも `cargo fmt --all -- --check` を実行しており、整形されていないコードは CI が失敗します。
+CI でも `cargo fmt --all -- --check` と `cargo clippy --all-targets -- -D warnings` を実行しており、整形されていないコードや clippy の警告が 1 つでもあるコードは CI が失敗します。
+
+CI は Windows (`windows-latest`) で動くため、`viewer/` の Windows 専用コード (`cfg(windows)` の `win` モジュール) も clippy の対象です。Windows 以外で `cargo clippy` を実行してもこのコードはチェックされないので注意してください。
 
 ## コーディング規約
 
