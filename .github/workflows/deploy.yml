@@ -27,6 +27,19 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
+      # タグと Cargo のバージョンが一致するかを確かめる
+      - name: Check version
+        shell: pwsh
+        run: |
+          $versions = @((cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages.version | Sort-Object -Unique)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($versions.Count -ne 1 -or $versions[0] -ne $tag) {
+            Write-Error "タグ ${{ github.ref_name }} と Cargo のバージョン ($($versions -join ', ')) が一致しません"
+            exit 1
+          }
+          "VERSION=$tag" >> $env:GITHUB_ENV
+
       # テスト実行 (失敗したらリリースしない)
       - name: Test
         run: cargo test --release
@@ -35,15 +48,15 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      # 実行ファイルをzipにまとめる
-      - name: Package
+      # インストーラーを作成 (windows-latest には Inno Setup 6 が入っている)
+      - name: Build installer
         shell: pwsh
         run: |
-          $name = "working-time-recorder-${{ github.ref_name }}-windows-x86_64.zip"
-          Compress-Archive -Path target/release/working-time-recorder.exe, target/release/working-time-viewer.exe, README.md -DestinationPath $name
-          "ASSET=$name" >> $env:GITHUB_ENV
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:VERSION" installer\working-time-recorder.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "ASSET=target/installer/working-time-recorder-${{ github.ref_name }}-windows-x86_64-setup.exe" >> $env:GITHUB_ENV
 
-      # GitHubリリースを作成
+      # GitHubリリースを作成 (上げるのはインストーラーだけ)
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:

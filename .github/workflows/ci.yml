@@ -35,3 +35,12 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+      # .iss の誤りを PR で見つけるため、デバッグビルドからインストーラーを作る
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages[0].version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DBuildDir=..\target\debug" installer\working-time-recorder.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
