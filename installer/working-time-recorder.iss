@@ -17,6 +17,9 @@
 #define AppName "Working Time Recorder"
 #define ViewerExe "working-time-viewer.exe"
 #define RecorderExe "working-time-recorder.exe"
+; 実行ファイルはどちらも {app}\bin に置き、PATH にはこのフォルダーを足す
+; (アンインストーラーなどがある {app} 直下を PATH に入れないため)
+#define BinDir "{app}\bin"
 #define RepositoryUrl "https://github.com/Yasami/working-time-recorder"
 
 [Setup]
@@ -36,7 +39,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DefaultDirName={autopf}\{#AppName}
 DisableProgramGroupPage=yes
 UninstallDisplayName={#AppName}
-UninstallDisplayIcon={app}\{#ViewerExe}
+UninstallDisplayIcon={#BinDir}\{#ViewerExe}
 ; PATH (HKCU\Environment) の変更を、起動中のエクスプローラーなどに知らせる
 ChangesEnvironment=yes
 ; ビューワーは [Code] で閉じ、[Run] で起動し直す
@@ -52,20 +55,20 @@ OutputBaseFilename=working-time-recorder-v{#AppVersion}-windows-x86_64-setup
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
 
 [Tasks]
-Name: "addtopath"; Description: "working-time-recorder を PATH に追加する (コマンドプロンプトなどから実行できるようにする)"
+Name: "addtopath"; Description: "working-time-recorder と working-time-viewer を PATH に追加する (コマンドプロンプトなどから実行できるようにする)"
 Name: "autostart"; Description: "ログオン時にビューワーを起動する"
 
 [Files]
-Source: "{#BuildDir}\{#ViewerExe}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BuildDir}\{#RecorderExe}"; DestDir: "{app}\bin"; Flags: ignoreversion
+Source: "{#BuildDir}\{#ViewerExe}"; DestDir: "{#BinDir}"; Flags: ignoreversion
+Source: "{#BuildDir}\{#RecorderExe}"; DestDir: "{#BinDir}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WorkingTimeViewer"; ValueData: """{app}\{#ViewerExe}"""; Flags: uninsdeletevalue; Tasks: autostart
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WorkingTimeViewer"; ValueData: """{#BinDir}\{#ViewerExe}"""; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
 ; 更新 (/SILENT) の後にもビューワーを起動し直すため、skipifsilent は付けない
-Filename: "{app}\{#ViewerExe}"; Description: "ビューワーを起動する"; Flags: nowait postinstall
+Filename: "{#BinDir}\{#ViewerExe}"; Description: "ビューワーを起動する"; Flags: nowait postinstall
 
 [Code]
 const
@@ -86,12 +89,12 @@ var
 
 function ViewerPath(): String;
 begin
-  Result := ExpandConstant('{app}\{#ViewerExe}');
+  Result := ExpandConstant('{#BinDir}\{#ViewerExe}');
 end;
 
 function BinDir(): String;
 begin
-  Result := ExpandConstant('{app}\bin');
+  Result := ExpandConstant('{#BinDir}');
 end;
 
 { 起動中のビューワーに終了を頼み、終わるまで待つ。終了した (または起動していない) なら True }

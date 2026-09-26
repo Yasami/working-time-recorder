@@ -34,6 +34,7 @@ use windows_sys::core::{PCWSTR, w};
 
 use crate::config::{self, Config};
 use crate::record::{self, Records};
+use crate::update::Version;
 
 const HOST_CLASS: PCWSTR = w!("WorkingTimeViewer.Host");
 const WM_TRAY: u32 = WM_APP + 1;
@@ -280,7 +281,9 @@ fn tray_data() -> NOTIFYICONDATAW {
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     data.uCallbackMessage = WM_TRAY;
     data.hIcon = icon;
-    let tip: Vec<u16> = "作業時間ビューワー".encode_utf16().collect();
+    let tip: Vec<u16> = format!("作業時間ビューワー {}", Version::current())
+        .encode_utf16()
+        .collect();
     let len = tip.len().min(data.szTip.len() - 1);
     data.szTip[..len].copy_from_slice(&tip[..len]);
     data
@@ -323,6 +326,13 @@ fn remove_tray_icon() {
 fn show_tray_menu(host: HWND) {
     unsafe {
         let menu = CreatePopupMenu();
+        // 実行中のバージョン (選べない項目として表示するだけ)
+        let version: Vec<u16> = format!("バージョン {}", Version::current())
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, version.as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, null());
         AppendMenuW(menu, MF_STRING, ID_MENU_TODAY, w!("今日の作業時間"));
         AppendMenuW(menu, MF_STRING, ID_MENU_HISTORY, w!("履歴を表示"));
         let (update_text, update_enabled) = updater::menu_item();
