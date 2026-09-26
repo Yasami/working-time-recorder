@@ -47,7 +47,7 @@ jobs:
 
       # 更新の確認を試せるよう、作ったインストーラーを PR からダウンロードできるようにする
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: installer
           path: target/installer/*-setup.exe
