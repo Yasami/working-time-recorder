@@ -79,16 +79,14 @@ pub struct DaySummary {
 
 impl DaySummary {
     pub fn empty(date: NaiveDate) -> Self {
-        DaySummary {
+        Self {
             date,
             tasks: Vec::new(),
         }
     }
 
     pub fn total(&self) -> Duration {
-        self.tasks
-            .iter()
-            .fold(Duration::zero(), |acc, t| acc + t.duration)
+        self.tasks.iter().map(|t| t.duration).sum()
     }
 
     /// 8時間に満たない分
@@ -122,7 +120,7 @@ impl Records {
     pub fn parse(content: &str) -> Self {
         let mut events: Vec<Event> = content.lines().filter_map(parse_line).collect();
         events.sort_by_key(|e| e.time);
-        Records {
+        Self {
             events,
             labels: Labels::new(),
         }
@@ -258,9 +256,9 @@ fn start_of_day(date: NaiveDate) -> DateTime<Local> {
 
 /// recorder と同じ規則で記録ファイルのパスを決める
 pub fn record_path() -> PathBuf {
-    match env::var("WORKING_TIME_RECORD") {
-        Ok(path) => PathBuf::from(path),
-        Err(_) => dirs::home_dir()
+    match env::var_os("WORKING_TIME_RECORD") {
+        Some(path) => PathBuf::from(path),
+        None => env::home_dir()
             .unwrap_or_default()
             .join("working_time_record.txt"),
     }
@@ -272,7 +270,7 @@ pub fn load(path: &Path) -> Result<Records, String> {
         Err(e) if e.kind() == ErrorKind::NotFound => {
             Err(format!("記録ファイルが見つかりません: {}", path.display()))
         }
-        Err(e) => Err(format!("記録ファイルを読み込めません: {}", e)),
+        Err(e) => Err(format!("記録ファイルを読み込めません: {e}")),
     }
 }
 
@@ -295,7 +293,7 @@ mod tests {
     }
 
     fn start(time: DateTime<Local>, task: &str) -> String {
-        format!("{}\tstart\t{}\n", time.to_rfc3339(), task)
+        format!("{}\tstart\t{task}\n", time.to_rfc3339())
     }
 
     fn stop(time: DateTime<Local>) -> String {

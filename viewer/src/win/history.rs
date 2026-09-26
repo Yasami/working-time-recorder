@@ -1,7 +1,6 @@
 //! 日ごとの作業時間の履歴ウィンドウ
 
-use std::ffi::c_void;
-use std::mem::{size_of, zeroed};
+use std::mem::zeroed;
 use std::ptr::{null, null_mut};
 
 use chrono::{Datelike, Duration, Local};
@@ -90,12 +89,12 @@ pub fn refresh() {
 }
 
 fn apply_title_bar_theme(hwnd: HWND) {
-    let dark = Theme::current().dark as i32;
+    let dark = i32::from(Theme::current().dark);
     unsafe {
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
-            &dark as *const i32 as *const c_void,
+            (&raw const dark).cast(),
             size_of::<i32>() as u32,
         );
     }
@@ -260,7 +259,7 @@ fn paint(hwnd: HWND) {
             for item in items {
                 let label = match item {
                     Some(task) => format!("{} {}", task.label, format_hm(task.duration)),
-                    None => format!("{} {}", IDLE_LABEL, format_hm(idle)),
+                    None => format!("{IDLE_LABEL} {}", format_hm(idle)),
                 };
                 let needed = s(12) + p.text_width(&label, &small_font);
                 let fits = x + needed <= right;

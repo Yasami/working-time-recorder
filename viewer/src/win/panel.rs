@@ -1,6 +1,6 @@
 //! タスクトレイのアイコンをクリックしたときに出るパネル
 
-use std::mem::{size_of, zeroed};
+use std::mem::zeroed;
 use std::ptr::{null, null_mut};
 
 use chrono::{Datelike, Duration, Local};
@@ -56,12 +56,8 @@ fn legend_rows(summary: &DaySummary) -> usize {
     if task_count == 0 {
         return 1;
     }
-    let task_rows = if task_count > MAX_ROWS {
-        MAX_ROWS + 1
-    } else {
-        task_count
-    };
-    task_rows + (summary.idle() > Duration::zero()) as usize
+    let task_rows = task_count.min(MAX_ROWS + 1);
+    task_rows + usize::from(summary.idle() > Duration::zero())
 }
 
 fn layout(scale: Scale, legend_rows: usize) -> Layout {
@@ -125,7 +121,7 @@ pub fn create() -> HWND {
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE as u32,
-            &preference as *const _ as *const _,
+            (&raw const preference).cast(),
             size_of::<i32>() as u32,
         );
         hwnd
@@ -184,7 +180,7 @@ pub fn show_auto() {
                 SetTimer(
                     hwnd,
                     TIMER_AUTO_HIDE,
-                    delay.as_millis().clamp(1, u32::MAX as u128) as u32,
+                    u32::try_from(delay.as_millis()).unwrap_or(u32::MAX).max(1),
                     None,
                 );
             }
@@ -195,7 +191,7 @@ pub fn show_auto() {
     }
 }
 
-unsafe fn open(hwnd: HWND, monitor: HMONITOR, show_cmd: SHOW_WINDOW_CMD) {
+fn open(hwnd: HWND, monitor: HMONITOR, show_cmd: SHOW_WINDOW_CMD) {
     unsafe {
         with_state(|s| {
             s.panel_monitor = monitor;
@@ -364,7 +360,7 @@ fn paint(hwnd: HWND) {
                 left: l.status.left + p.text_width("●", &small_font) + s(4),
                 ..l.status
             };
-            let text = format!("作業中: {}", task);
+            let text = format!("作業中: {task}");
             p.text(
                 &text,
                 text_rect,
@@ -443,11 +439,7 @@ fn paint(hwnd: HWND) {
                 DT_LEFT | DT_VCENTER,
             );
         }
-        let visible = if tasks.len() > MAX_ROWS {
-            MAX_ROWS
-        } else {
-            tasks.len()
-        };
+        let visible = tasks.len().min(MAX_ROWS);
         for (i, task) in tasks.iter().take(visible).enumerate() {
             let r = row(i);
             let marker_top = (r.top + r.bottom - s(10)) / 2;
@@ -475,9 +467,7 @@ fn paint(hwnd: HWND) {
         let mut next_row = visible;
         if tasks.len() > visible {
             let others = &tasks[visible..];
-            let duration = others
-                .iter()
-                .fold(Duration::zero(), |acc, t| acc + t.duration);
+            let duration: Duration = others.iter().map(|t| t.duration).sum();
             let r = row(next_row);
             let label_rect = RECT {
                 left: r.left + s(18),

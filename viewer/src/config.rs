@@ -26,7 +26,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config {
+        Self {
             popup_interval: positive_duration(DEFAULT_POPUP_INTERVAL_MINUTES * 60.0),
             auto_hide: positive_duration(DEFAULT_AUTO_HIDE_SECONDS),
             labels: Labels::new(),
@@ -57,19 +57,19 @@ fn positive_duration(seconds: f64) -> Option<Duration> {
 
 pub fn parse(content: &str) -> Result<Config, String> {
     let raw: RawConfig = serde_json::from_str(content.trim_start_matches('\u{feff}'))
-        .map_err(|e| format!("設定ファイルの形式が正しくありません: {}", e))?;
+        .map_err(|e| format!("設定ファイルの形式が正しくありません: {e}"))?;
 
     let mut labels = Labels::new();
     for (task, label) in raw.labels {
-        let color = match label.color.as_deref() {
-            Some(code) => Some(parse_color(code).ok_or_else(|| {
-                format!(
-                    "設定ファイルのカラーコードが正しくありません: {} ({})",
-                    code, task
-                )
-            })?),
-            None => None,
-        };
+        let color = label
+            .color
+            .as_deref()
+            .map(|code| {
+                parse_color(code).ok_or_else(|| {
+                    format!("設定ファイルのカラーコードが正しくありません: {code} ({task})")
+                })
+            })
+            .transpose()?;
         let text = label
             .label
             .map(|s| s.trim().to_string())
@@ -109,7 +109,7 @@ pub fn load(path: &Path) -> Result<Config, String> {
     match fs::read(path) {
         Ok(bytes) => parse(&String::from_utf8_lossy(&bytes)),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(Config::default()),
-        Err(e) => Err(format!("設定ファイルを読み込めません: {}", e)),
+        Err(e) => Err(format!("設定ファイルを読み込めません: {e}")),
     }
 }
 

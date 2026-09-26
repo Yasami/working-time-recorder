@@ -1,7 +1,6 @@
 //! GDI 描画ヘルパー、配色、アイコン生成
 
-use std::ffi::c_void;
-use std::mem::{size_of, zeroed};
+use std::mem::zeroed;
 use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{COLORREF, ERROR_SUCCESS, HWND, RECT, SIZE};
@@ -77,7 +76,7 @@ const DARK: Theme = Theme {
 
 impl Theme {
     /// Windows のアプリモード (ライト / ダーク) に合わせる
-    pub fn current() -> Theme {
+    pub fn current() -> Self {
         let mut value: u32 = 1;
         let mut size = size_of::<u32>() as u32;
         let status = unsafe {
@@ -87,7 +86,7 @@ impl Theme {
                 w!("AppsUseLightTheme"),
                 RRF_RT_REG_DWORD,
                 null_mut(),
-                &mut value as *mut u32 as *mut c_void,
+                (&raw mut value).cast(),
                 &mut size,
             )
         };
@@ -121,9 +120,9 @@ pub fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
 pub struct Font(HFONT);
 
 impl Font {
-    pub fn new(scale: Scale, size_dip: i32, bold: bool) -> Font {
+    pub fn new(scale: Scale, size_dip: i32, bold: bool) -> Self {
         let weight = if bold { FW_SEMIBOLD } else { FW_NORMAL };
-        Font(unsafe {
+        Self(unsafe {
             CreateFontW(
                 -scale.px(size_dip),
                 0,

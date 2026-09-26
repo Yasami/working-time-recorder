@@ -7,7 +7,7 @@ mod panel;
 
 use std::cell::RefCell;
 use std::fs;
-use std::mem::{size_of, zeroed};
+use std::mem::zeroed;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::time::{Instant, SystemTime};
@@ -226,7 +226,7 @@ pub fn run() {
     }
 }
 
-unsafe fn register_class(
+fn register_class(
     name: PCWSTR,
     proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
     small_icon: HICON,
@@ -282,7 +282,7 @@ fn remove_tray_icon() {
     }
 }
 
-unsafe fn show_tray_menu(host: HWND) {
+fn show_tray_menu(host: HWND) {
     unsafe {
         let menu = CreatePopupMenu();
         AppendMenuW(menu, MF_STRING, ID_MENU_TODAY, w!("今日の作業時間"));
