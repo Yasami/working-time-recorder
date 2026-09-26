@@ -283,7 +283,11 @@ pub fn on_downloaded(lparam: LPARAM) {
     });
     let error = match result {
         Ok(path) => {
-            let file: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            // 一時フォルダーは canonicalize しているので、\\?\ 付きのパスを通常の形に戻して渡す
+            let file: Vec<u16> = match path.to_str() {
+                Some(path) => wide(&update::strip_verbatim_prefix(path)),
+                None => path.as_os_str().encode_wide().chain(Some(0)).collect(),
+            };
             // インストーラーがこのビューワーを終了させ、インストール後に起動し直す
             let code = unsafe {
                 ShellExecuteW(

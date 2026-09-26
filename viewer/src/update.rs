@@ -123,6 +123,19 @@ fn parse_sha256_digest(digest: &str) -> Result<Option<[u8; 32]>, ()> {
     Ok(Some(hash))
 }
 
+/// `canonicalize` が返す `\\?\C:\...` や `\\?\UNC\server\...` を通常の形に戻す。
+/// ShellExecuteW などは `\\?\` 付きのパスを扱えないことがある
+pub fn strip_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match path.strip_prefix(r"\\?\") {
+        // ドライブ文字で始まるものだけ戻す (\\?\Volume{...} などは戻せない)
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => path.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +232,26 @@ mod tests {
         );
         // JSON でない
         assert!(parse_release("Not Found").is_err());
+    }
+
+    #[test]
+    fn test_strip_verbatim_prefix() {
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\C:\Users\a\Temp\setup.exe"),
+            r"C:\Users\a\Temp\setup.exe"
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\server\share\setup.exe"),
+            r"\\server\share\setup.exe"
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"C:\Users\a\setup.exe"),
+            r"C:\Users\a\setup.exe"
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\Volume{0}\setup.exe"),
+            r"\\?\Volume{0}\setup.exe"
+        );
     }
 
     #[test]
