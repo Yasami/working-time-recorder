@@ -61,7 +61,7 @@ cargo build --release
 
 デバッグビルドのビューワーは、環境変数 `WORKING_TIME_VIEWER_UPDATE_REPO` (`owner/repo`) を設定すると、
 そのリポジトリのリリースを使って更新を確認します (リリースビルドはこの環境変数を読みません)。
-PR の CI が作るインストーラー (Actions の成果物 `installer`) はデバッグビルドなので、次のように試せます。
+PR の CI が作るインストーラー (Actions の成果物 `working-time-recorder-vX.Y.Z-windows-x86_64-setup.exe`) はデバッグビルドなので、次のように試せます。
 
 1. テスト用のリポジトリにリリースを作り、インストーラー (名前が `-setup.exe` で終わるもの) を添付する
 2. `setx WORKING_TIME_VIEWER_UPDATE_REPO <owner>/<repo>` を実行してから、ビューワーを起動し直す
