@@ -5,11 +5,10 @@ use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 
 use chrono::{Datelike, Duration, Local};
-use windows_sys::core::{w, PCWSTR};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows_sys::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{
-    InvalidateRect, DT_END_ELLIPSIS, DT_LEFT, DT_RIGHT, DT_VCENTER,
+    DT_END_ELLIPSIS, DT_LEFT, DT_RIGHT, DT_VCENTER, InvalidateRect,
 };
 use windows_sys::Win32::UI::Controls::SetScrollInfo;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
@@ -17,10 +16,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
+use windows_sys::core::{PCWSTR, w};
 
-use super::gdi::{paint_buffered, rect, task_color, Font, Scale, Theme};
+use super::gdi::{Font, Scale, Theme, paint_buffered, rect, task_color};
 use super::{bar, hinstance, reload_records, with_state};
-use crate::record::{format_hm, weekday_ja, DaySummary, IDLE_LABEL, WORKDAY_SECONDS};
+use crate::record::{DaySummary, IDLE_LABEL, WORKDAY_SECONDS, format_hm, weekday_ja};
 
 pub const CLASS: PCWSTR = w!("WorkingTimeViewer.History");
 
@@ -161,21 +161,50 @@ fn paint(hwnd: HWND) {
 
         let origin = -scroll;
         let header = rect(left, origin + s(16), right, origin + s(46));
-        p.text("作業時間の履歴", header, &title_font, t.text, DT_LEFT | DT_VCENTER);
+        p.text(
+            "作業時間の履歴",
+            header,
+            &title_font,
+            t.text,
+            DT_LEFT | DT_VCENTER,
+        );
 
-        let first_row = rect(left, origin + s(HEADER_H), right, origin + s(HEADER_H + ROW_H));
+        let first_row = rect(
+            left,
+            origin + s(HEADER_H),
+            right,
+            origin + s(HEADER_H + ROW_H),
+        );
         let days = match days {
             Err(error) => {
-                p.text(&error, first_row, &body_font, t.danger, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+                p.text(
+                    &error,
+                    first_row,
+                    &body_font,
+                    t.danger,
+                    DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS,
+                );
                 return;
             }
             Ok(days) if days.is_empty() => {
-                p.text("記録はまだありません", first_row, &body_font, t.subtext, DT_LEFT | DT_VCENTER);
+                p.text(
+                    "記録はまだありません",
+                    first_row,
+                    &body_font,
+                    t.subtext,
+                    DT_LEFT | DT_VCENTER,
+                );
                 return;
             }
             Ok(days) => days,
         };
-        p.text(&format!("{} 日分", days.len()), header, &body_font, t.subtext, DT_RIGHT | DT_VCENTER);
+        p.text(
+            &format!("{} 日分", days.len()),
+            header,
+            &body_font,
+            t.subtext,
+            DT_RIGHT | DT_VCENTER,
+        );
 
         for (i, day) in days.iter().enumerate() {
             let top = origin + s(HEADER_H) + s(ROW_H) * i as i32;
@@ -189,8 +218,20 @@ fn paint(hwnd: HWND) {
 
             // 日付と合計
             let date = day.date;
-            let date_text = format!("{}/{:02}/{:02} ({})", date.year(), date.month(), date.day(), weekday_ja(date));
-            p.text(&date_text, rect(left, top + s(12), left + s(DATE_COL), top + s(34)), &date_font, t.text, DT_LEFT | DT_VCENTER);
+            let date_text = format!(
+                "{}/{:02}/{:02} ({})",
+                date.year(),
+                date.month(),
+                date.day(),
+                weekday_ja(date)
+            );
+            p.text(
+                &date_text,
+                rect(left, top + s(12), left + s(DATE_COL), top + s(34)),
+                &date_font,
+                t.text,
+                DT_LEFT | DT_VCENTER,
+            );
             let total = day.total();
             let over = total > Duration::seconds(WORKDAY_SECONDS);
             p.text(
@@ -211,7 +252,11 @@ fn paint(hwnd: HWND) {
             let (legend_top, legend_bottom) = (top + s(36), top + s(56));
             let mut x = bar_left;
             let idle = day.idle();
-            let items = day.tasks.iter().map(Some).chain((idle > Duration::zero()).then_some(None));
+            let items = day
+                .tasks
+                .iter()
+                .map(Some)
+                .chain((idle > Duration::zero()).then_some(None));
             for item in items {
                 let label = match item {
                     Some(task) => format!("{} {}", task.label, format_hm(task.duration)),
@@ -220,7 +265,13 @@ fn paint(hwnd: HWND) {
                 let needed = s(12) + p.text_width(&label, &small_font);
                 let fits = x + needed <= right;
                 if !fits && right - x < s(60) {
-                    p.text("…", rect(x, legend_top, right, legend_bottom), &small_font, t.subtext, DT_LEFT | DT_VCENTER);
+                    p.text(
+                        "…",
+                        rect(x, legend_top, right, legend_bottom),
+                        &small_font,
+                        t.subtext,
+                        DT_LEFT | DT_VCENTER,
+                    );
                     break;
                 }
                 let marker_top = (legend_top + legend_bottom - s(8)) / 2;
@@ -229,8 +280,19 @@ fn paint(hwnd: HWND) {
                     Some(task) => p.fill_round(marker, 2, task_color(task)),
                     None => bar::draw_idle_marker(p, marker),
                 }
-                let label_rect = rect(x + s(12), legend_top, (x + needed).min(right), legend_bottom);
-                p.text(&label, label_rect, &small_font, t.subtext, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+                let label_rect = rect(
+                    x + s(12),
+                    legend_top,
+                    (x + needed).min(right),
+                    legend_bottom,
+                );
+                p.text(
+                    &label,
+                    label_rect,
+                    &small_font,
+                    t.subtext,
+                    DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS,
+                );
                 if !fits {
                     break;
                 }
@@ -240,99 +302,106 @@ fn paint(hwnd: HWND) {
     });
 }
 
-pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT { unsafe {
-    match msg {
-        WM_PAINT => {
-            paint(hwnd);
-            0
-        }
-        WM_ERASEBKGND => 1,
-        WM_SIZE => {
-            update_scrollbar(hwnd);
-            InvalidateRect(hwnd, null(), 0);
-            0
-        }
-        WM_ACTIVATE => {
-            if wparam & 0xFFFF != 0 {
-                reload_records();
+pub unsafe extern "system" fn wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_PAINT => {
+                paint(hwnd);
+                0
+            }
+            WM_ERASEBKGND => 1,
+            WM_SIZE => {
                 update_scrollbar(hwnd);
                 InvalidateRect(hwnd, null(), 0);
+                0
             }
-            0
-        }
-        WM_VSCROLL => {
-            let scale = Scale(GetDpiForWindow(hwnd));
-            let page = client_height(hwnd);
-            match (wparam & 0xFFFF) as i32 {
-                SB_LINEUP => scroll_by(hwnd, -scale.px(40)),
-                SB_LINEDOWN => scroll_by(hwnd, scale.px(40)),
-                SB_PAGEUP => scroll_by(hwnd, -page),
-                SB_PAGEDOWN => scroll_by(hwnd, page),
-                SB_TOP => scroll_to(hwnd, 0),
-                SB_BOTTOM => scroll_to(hwnd, i32::MAX),
-                SB_THUMBTRACK | SB_THUMBPOSITION => {
-                    let mut info: SCROLLINFO = zeroed();
-                    info.cbSize = size_of::<SCROLLINFO>() as u32;
-                    info.fMask = SIF_TRACKPOS;
-                    GetScrollInfo(hwnd, SB_VERT, &mut info);
-                    scroll_to(hwnd, info.nTrackPos);
+            WM_ACTIVATE => {
+                if wparam & 0xFFFF != 0 {
+                    reload_records();
+                    update_scrollbar(hwnd);
+                    InvalidateRect(hwnd, null(), 0);
                 }
-                _ => {}
+                0
             }
-            0
-        }
-        WM_MOUSEWHEEL => {
-            let delta = ((wparam >> 16) & 0xFFFF) as u16 as i16 as i32;
-            let scale = Scale(GetDpiForWindow(hwnd));
-            scroll_by(hwnd, -delta * scale.px(ROW_H) / 120);
-            0
-        }
-        WM_KEYDOWN => {
-            let scale = Scale(GetDpiForWindow(hwnd));
-            let page = client_height(hwnd);
-            match wparam as u16 {
-                VK_UP => scroll_by(hwnd, -scale.px(40)),
-                VK_DOWN => scroll_by(hwnd, scale.px(40)),
-                VK_PRIOR => scroll_by(hwnd, -page),
-                VK_NEXT => scroll_by(hwnd, page),
-                VK_HOME => scroll_to(hwnd, 0),
-                VK_END => scroll_to(hwnd, i32::MAX),
-                VK_ESCAPE => {
-                    DestroyWindow(hwnd);
+            WM_VSCROLL => {
+                let scale = Scale(GetDpiForWindow(hwnd));
+                let page = client_height(hwnd);
+                match (wparam & 0xFFFF) as i32 {
+                    SB_LINEUP => scroll_by(hwnd, -scale.px(40)),
+                    SB_LINEDOWN => scroll_by(hwnd, scale.px(40)),
+                    SB_PAGEUP => scroll_by(hwnd, -page),
+                    SB_PAGEDOWN => scroll_by(hwnd, page),
+                    SB_TOP => scroll_to(hwnd, 0),
+                    SB_BOTTOM => scroll_to(hwnd, i32::MAX),
+                    SB_THUMBTRACK | SB_THUMBPOSITION => {
+                        let mut info: SCROLLINFO = zeroed();
+                        info.cbSize = size_of::<SCROLLINFO>() as u32;
+                        info.fMask = SIF_TRACKPOS;
+                        GetScrollInfo(hwnd, SB_VERT, &mut info);
+                        scroll_to(hwnd, info.nTrackPos);
+                    }
+                    _ => {}
                 }
-                _ => {}
+                0
             }
-            0
+            WM_MOUSEWHEEL => {
+                let delta = ((wparam >> 16) & 0xFFFF) as u16 as i16 as i32;
+                let scale = Scale(GetDpiForWindow(hwnd));
+                scroll_by(hwnd, -delta * scale.px(ROW_H) / 120);
+                0
+            }
+            WM_KEYDOWN => {
+                let scale = Scale(GetDpiForWindow(hwnd));
+                let page = client_height(hwnd);
+                match wparam as u16 {
+                    VK_UP => scroll_by(hwnd, -scale.px(40)),
+                    VK_DOWN => scroll_by(hwnd, scale.px(40)),
+                    VK_PRIOR => scroll_by(hwnd, -page),
+                    VK_NEXT => scroll_by(hwnd, page),
+                    VK_HOME => scroll_to(hwnd, 0),
+                    VK_END => scroll_to(hwnd, i32::MAX),
+                    VK_ESCAPE => {
+                        DestroyWindow(hwnd);
+                    }
+                    _ => {}
+                }
+                0
+            }
+            WM_GETMINMAXINFO => {
+                let scale = Scale(GetDpiForWindow(hwnd));
+                let info = &mut *(lparam as *mut MINMAXINFO);
+                info.ptMinTrackSize.x = scale.px(420);
+                info.ptMinTrackSize.y = scale.px(300);
+                0
+            }
+            WM_DPICHANGED => {
+                let suggested = &*(lparam as *const RECT);
+                SetWindowPos(
+                    hwnd,
+                    null_mut(),
+                    suggested.left,
+                    suggested.top,
+                    suggested.right - suggested.left,
+                    suggested.bottom - suggested.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+                0
+            }
+            WM_SETTINGCHANGE => {
+                apply_title_bar_theme(hwnd);
+                InvalidateRect(hwnd, null(), 0);
+                0
+            }
+            WM_DESTROY => {
+                with_state(|s| s.history = null_mut());
+                0
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
-        WM_GETMINMAXINFO => {
-            let scale = Scale(GetDpiForWindow(hwnd));
-            let info = &mut *(lparam as *mut MINMAXINFO);
-            info.ptMinTrackSize.x = scale.px(420);
-            info.ptMinTrackSize.y = scale.px(300);
-            0
-        }
-        WM_DPICHANGED => {
-            let suggested = &*(lparam as *const RECT);
-            SetWindowPos(
-                hwnd,
-                null_mut(),
-                suggested.left,
-                suggested.top,
-                suggested.right - suggested.left,
-                suggested.bottom - suggested.top,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-            0
-        }
-        WM_SETTINGCHANGE => {
-            apply_title_bar_theme(hwnd);
-            InvalidateRect(hwnd, null(), 0);
-            0
-        }
-        WM_DESTROY => {
-            with_state(|s| s.history = null_mut());
-            0
-        }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-}}
+}

@@ -79,7 +79,10 @@ pub struct DaySummary {
 
 impl DaySummary {
     pub fn empty(date: NaiveDate) -> Self {
-        DaySummary { date, tasks: Vec::new() }
+        DaySummary {
+            date,
+            tasks: Vec::new(),
+        }
     }
 
     pub fn total(&self) -> Duration {
@@ -119,7 +122,10 @@ impl Records {
     pub fn parse(content: &str) -> Self {
         let mut events: Vec<Event> = content.lines().filter_map(parse_line).collect();
         events.sort_by_key(|e| e.time);
-        Records { events, labels: Labels::new() }
+        Records {
+            events,
+            labels: Labels::new(),
+        }
     }
 
     pub fn with_labels(mut self, labels: Labels) -> Self {
@@ -164,7 +170,11 @@ impl Records {
             let date = event.time.date_naive();
             let next_day = date.succ_opt();
             let end = match self.events.get(i + 1) {
-                Some(next) if next.kind == EventKind::Stop && Some(next.time.date_naive()) == next_day => next.time,
+                Some(next)
+                    if next.kind == EventKind::Stop && Some(next.time.date_naive()) == next_day =>
+                {
+                    next.time
+                }
                 Some(next) => next.time.min(end_of_day(date)),
                 None => now.min(end_of_day(date)),
             };
@@ -351,7 +361,12 @@ mod tests {
 
     #[test]
     fn test_stop_first_on_next_day_is_split_at_midnight() {
-        let content = [start(at(14, 23, 0), "a"), stop(at(15, 1, 30)), start(at(15, 9, 0), "b")].concat();
+        let content = [
+            start(at(14, 23, 0), "a"),
+            stop(at(15, 1, 30)),
+            start(at(15, 9, 0), "b"),
+        ]
+        .concat();
         let days = Records::parse(&content).daily_summaries(at(15, 10, 0));
         assert_eq!(durations(&days[&date(14)]), vec![("a", 60)]);
         assert_eq!(durations(&days[&date(15)]), vec![("a", 90), ("b", 60)]);
@@ -405,7 +420,11 @@ mod tests {
 
     #[test]
     fn test_crlf_line_endings() {
-        let content = format!("{}\tstart\ta\r\n{}\tstop\t\r\n", at(14, 9, 0).to_rfc3339(), at(14, 9, 20).to_rfc3339());
+        let content = format!(
+            "{}\tstart\ta\r\n{}\tstop\t\r\n",
+            at(14, 9, 0).to_rfc3339(),
+            at(14, 9, 20).to_rfc3339()
+        );
         let summary = Records::parse(&content).day_summary(date(14), at(14, 12, 0));
         assert_eq!(durations(&summary), vec![("a", 20)]);
     }
@@ -426,7 +445,10 @@ mod tests {
         let content = [start(at(14, 9, 0), "a"), start(at(14, 10, 0), "b")].concat();
         let labels = Labels::from([(
             "a".to_string(),
-            Label { text: Some("設計".into()), color: Some(0xFF0000) },
+            Label {
+                text: Some("設計".into()),
+                color: Some(0xFF0000),
+            },
         )]);
         let records = Records::parse(&content).with_labels(labels);
         let summary = records.day_summary(date(14), at(14, 11, 0));

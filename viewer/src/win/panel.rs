@@ -4,26 +4,26 @@ use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 
 use chrono::{Datelike, Duration, Local};
-use windows_sys::core::{w, PCWSTR};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, InvalidateRect, MonitorFromPoint, PtInRect, DT_CENTER, DT_END_ELLIPSIS,
-    DT_LEFT, DT_RIGHT, DT_VCENTER, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    MONITOR_DEFAULTTOPRIMARY,
+    DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_RIGHT, DT_VCENTER, GetMonitorInfoW, HMONITOR,
+    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+    MonitorFromPoint, PtInRect,
 };
+use windows_sys::Win32::System::SystemInformation::GetTickCount;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE,
+    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
-use windows_sys::Win32::System::SystemInformation::GetTickCount;
+use windows_sys::core::{PCWSTR, w};
 
-use super::gdi::{paint_buffered, rect, task_color, Font, Scale};
+use super::gdi::{Font, Scale, paint_buffered, rect, task_color};
 use super::{bar, hinstance, history, reload_records, with_state};
-use crate::record::{format_hm, weekday_ja, DaySummary, IDLE_LABEL, WORKDAY_SECONDS};
+use crate::record::{DaySummary, IDLE_LABEL, WORKDAY_SECONDS, format_hm, weekday_ja};
 
 pub const CLASS: PCWSTR = w!("WorkingTimeViewer.Panel");
 
@@ -56,7 +56,11 @@ fn legend_rows(summary: &DaySummary) -> usize {
     if task_count == 0 {
         return 1;
     }
-    let task_rows = if task_count > MAX_ROWS { MAX_ROWS + 1 } else { task_count };
+    let task_rows = if task_count > MAX_ROWS {
+        MAX_ROWS + 1
+    } else {
+        task_count
+    };
     task_rows + (summary.idle() > Duration::zero()) as usize
 }
 
@@ -147,7 +151,11 @@ pub fn show() {
     unsafe {
         let mut cursor: POINT = zeroed();
         GetCursorPos(&mut cursor);
-        open(hwnd, MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), SW_SHOW);
+        open(
+            hwnd,
+            MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST),
+            SW_SHOW,
+        );
         stop_auto_hide(hwnd);
         SetForegroundWindow(hwnd);
     }
@@ -160,7 +168,11 @@ pub fn show_auto() {
     unsafe {
         if IsWindowVisible(hwnd) == 0 {
             // タスクトレイのあるプライマリモニターに出す
-            open(hwnd, MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY), SW_SHOWNOACTIVATE);
+            open(
+                hwnd,
+                MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY),
+                SW_SHOWNOACTIVATE,
+            );
             with_state(|s| s.panel_auto = true);
         } else if !auto {
             // 自分で開いたパネルはそのまま
@@ -169,7 +181,12 @@ pub fn show_auto() {
         // 自動で表示中にまた変化したら、消えるまでの時間を延ばす
         match auto_hide {
             Some(delay) => {
-                SetTimer(hwnd, TIMER_AUTO_HIDE, delay.as_millis().clamp(1, u32::MAX as u128) as u32, None);
+                SetTimer(
+                    hwnd,
+                    TIMER_AUTO_HIDE,
+                    delay.as_millis().clamp(1, u32::MAX as u128) as u32,
+                    None,
+                );
             }
             None => {
                 KillTimer(hwnd, TIMER_AUTO_HIDE);
@@ -178,16 +195,18 @@ pub fn show_auto() {
     }
 }
 
-unsafe fn open(hwnd: HWND, monitor: HMONITOR, show_cmd: SHOW_WINDOW_CMD) { unsafe {
-    with_state(|s| {
-        s.panel_monitor = monitor;
-        s.panel_hover = false;
-    });
-    place(hwnd);
-    ShowWindow(hwnd, show_cmd);
-    InvalidateRect(hwnd, null(), 0);
-    SetTimer(hwnd, TIMER_REFRESH, REFRESH_INTERVAL_MS, None);
-}}
+unsafe fn open(hwnd: HWND, monitor: HMONITOR, show_cmd: SHOW_WINDOW_CMD) {
+    unsafe {
+        with_state(|s| {
+            s.panel_monitor = monitor;
+            s.panel_hover = false;
+        });
+        place(hwnd);
+        ShowWindow(hwnd, show_cmd);
+        InvalidateRect(hwnd, null(), 0);
+        SetTimer(hwnd, TIMER_REFRESH, REFRESH_INTERVAL_MS, None);
+    }
+}
 
 /// 自動で表示したパネルを、自分で開いたものとして扱う
 fn stop_auto_hide(hwnd: HWND) {
@@ -224,7 +243,9 @@ fn cursor_in_window(hwnd: HWND) -> bool {
     unsafe {
         let mut cursor: POINT = zeroed();
         let mut window: RECT = zeroed();
-        GetCursorPos(&mut cursor) != 0 && GetWindowRect(hwnd, &mut window) != 0 && PtInRect(&window, cursor) != 0
+        GetCursorPos(&mut cursor) != 0
+            && GetWindowRect(hwnd, &mut window) != 0
+            && PtInRect(&window, cursor) != 0
     }
 }
 
@@ -291,14 +312,32 @@ fn paint(hwnd: HWND) {
 
         // 見出しと日付
         let date = snap.today.date;
-        p.text("今日の作業時間", l.header, &title_font, t.text, DT_LEFT | DT_VCENTER);
+        p.text(
+            "今日の作業時間",
+            l.header,
+            &title_font,
+            t.text,
+            DT_LEFT | DT_VCENTER,
+        );
         let date_text = format!("{}月{}日 ({})", date.month(), date.day(), weekday_ja(date));
-        p.text(&date_text, l.header, &body_font, t.subtext, DT_RIGHT | DT_VCENTER);
+        p.text(
+            &date_text,
+            l.header,
+            &body_font,
+            t.subtext,
+            DT_RIGHT | DT_VCENTER,
+        );
 
         // 合計
         let total = snap.today.total();
         let total_text = format_hm(total);
-        p.text(&total_text, l.total, &big_font, t.text, DT_LEFT | DT_VCENTER);
+        p.text(
+            &total_text,
+            l.total,
+            &big_font,
+            t.text,
+            DT_LEFT | DT_VCENTER,
+        );
         let rest = RECT {
             left: l.total.left + p.text_width(&total_text, &big_font) + s(6),
             ..l.total
@@ -312,7 +351,13 @@ fn paint(hwnd: HWND) {
 
         // 状態
         if let Some(error) = &snap.error {
-            p.text(error, l.status, &small_font, t.danger, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            p.text(
+                error,
+                l.status,
+                &small_font,
+                t.danger,
+                DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS,
+            );
         } else if let Some(task) = &snap.current_task {
             p.text("●", l.status, &small_font, t.active, DT_LEFT | DT_VCENTER);
             let text_rect = RECT {
@@ -320,27 +365,67 @@ fn paint(hwnd: HWND) {
                 ..l.status
             };
             let text = format!("作業中: {}", task);
-            p.text(&text, text_rect, &body_font, t.text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            p.text(
+                &text,
+                text_rect,
+                &body_font,
+                t.text,
+                DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS,
+            );
         } else {
-            p.text("停止中", l.status, &body_font, t.subtext, DT_LEFT | DT_VCENTER);
+            p.text(
+                "停止中",
+                l.status,
+                &body_font,
+                t.subtext,
+                DT_LEFT | DT_VCENTER,
+            );
         }
 
         // 横バー
         bar::draw(p, l.bar, &snap.today);
-        p.text("0h", l.bar_labels, &small_font, t.subtext, DT_LEFT | DT_VCENTER);
+        p.text(
+            "0h",
+            l.bar_labels,
+            &small_font,
+            t.subtext,
+            DT_LEFT | DT_VCENTER,
+        );
         if overtime > Duration::zero() {
             // 右端は総作業時間、点線の下に 8h
             let end_text = format_hm(total);
-            p.text(&end_text, l.bar_labels, &small_font, t.subtext, DT_RIGHT | DT_VCENTER);
+            p.text(
+                &end_text,
+                l.bar_labels,
+                &small_font,
+                t.subtext,
+                DT_RIGHT | DT_VCENTER,
+            );
             let x = bar::x_at(l.bar, &snap.today, WORKDAY_SECONDS);
             let width = p.text_width("8h", &small_font);
-            let label = RECT { left: x - width / 2, right: x + width - width / 2, ..l.bar_labels };
+            let label = RECT {
+                left: x - width / 2,
+                right: x + width - width / 2,
+                ..l.bar_labels
+            };
             if label.right + s(4) <= l.bar_labels.right - p.text_width(&end_text, &small_font) {
                 p.text("8h", label, &small_font, t.subtext, DT_CENTER | DT_VCENTER);
             }
         } else {
-            p.text("4h", l.bar_labels, &small_font, t.subtext, DT_CENTER | DT_VCENTER);
-            p.text("8h", l.bar_labels, &small_font, t.subtext, DT_RIGHT | DT_VCENTER);
+            p.text(
+                "4h",
+                l.bar_labels,
+                &small_font,
+                t.subtext,
+                DT_CENTER | DT_VCENTER,
+            );
+            p.text(
+                "8h",
+                l.bar_labels,
+                &small_font,
+                t.subtext,
+                DT_RIGHT | DT_VCENTER,
+            );
         }
 
         // 凡例
@@ -350,116 +435,198 @@ fn paint(hwnd: HWND) {
         };
         let tasks = &snap.today.tasks;
         if tasks.is_empty() {
-            p.text("今日の記録はまだありません", row(0), &body_font, t.subtext, DT_LEFT | DT_VCENTER);
+            p.text(
+                "今日の記録はまだありません",
+                row(0),
+                &body_font,
+                t.subtext,
+                DT_LEFT | DT_VCENTER,
+            );
         }
-        let visible = if tasks.len() > MAX_ROWS { MAX_ROWS } else { tasks.len() };
+        let visible = if tasks.len() > MAX_ROWS {
+            MAX_ROWS
+        } else {
+            tasks.len()
+        };
         for (i, task) in tasks.iter().take(visible).enumerate() {
             let r = row(i);
             let marker_top = (r.top + r.bottom - s(10)) / 2;
-            p.fill_round(rect(r.left, marker_top, r.left + s(10), marker_top + s(10)), 2, task_color(task));
+            p.fill_round(
+                rect(r.left, marker_top, r.left + s(10), marker_top + s(10)),
+                2,
+                task_color(task),
+            );
             let name_rect = rect(r.left + s(18), r.top, r.right - s(64), r.bottom);
-            p.text(&task.label, name_rect, &body_font, t.text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-            p.text(&format_hm(task.duration), r, &body_font, t.subtext, DT_RIGHT | DT_VCENTER);
+            p.text(
+                &task.label,
+                name_rect,
+                &body_font,
+                t.text,
+                DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS,
+            );
+            p.text(
+                &format_hm(task.duration),
+                r,
+                &body_font,
+                t.subtext,
+                DT_RIGHT | DT_VCENTER,
+            );
         }
         let mut next_row = visible;
         if tasks.len() > visible {
             let others = &tasks[visible..];
-            let duration = others.iter().fold(Duration::zero(), |acc, t| acc + t.duration);
+            let duration = others
+                .iter()
+                .fold(Duration::zero(), |acc, t| acc + t.duration);
             let r = row(next_row);
-            let label_rect = RECT { left: r.left + s(18), ..r };
-            p.text(&format!("ほか {} 件", others.len()), label_rect, &body_font, t.subtext, DT_LEFT | DT_VCENTER);
-            p.text(&format_hm(duration), r, &body_font, t.subtext, DT_RIGHT | DT_VCENTER);
+            let label_rect = RECT {
+                left: r.left + s(18),
+                ..r
+            };
+            p.text(
+                &format!("ほか {} 件", others.len()),
+                label_rect,
+                &body_font,
+                t.subtext,
+                DT_LEFT | DT_VCENTER,
+            );
+            p.text(
+                &format_hm(duration),
+                r,
+                &body_font,
+                t.subtext,
+                DT_RIGHT | DT_VCENTER,
+            );
             next_row += 1;
         }
         let idle = snap.today.idle();
         if !tasks.is_empty() && idle > Duration::zero() {
             let r = row(next_row);
             let marker_top = (r.top + r.bottom - s(10)) / 2;
-            bar::draw_idle_marker(p, rect(r.left, marker_top, r.left + s(10), marker_top + s(10)));
-            let label_rect = RECT { left: r.left + s(18), ..r };
-            p.text(IDLE_LABEL, label_rect, &body_font, t.subtext, DT_LEFT | DT_VCENTER);
-            p.text(&format_hm(idle), r, &body_font, t.subtext, DT_RIGHT | DT_VCENTER);
+            bar::draw_idle_marker(
+                p,
+                rect(r.left, marker_top, r.left + s(10), marker_top + s(10)),
+            );
+            let label_rect = RECT {
+                left: r.left + s(18),
+                ..r
+            };
+            p.text(
+                IDLE_LABEL,
+                label_rect,
+                &body_font,
+                t.subtext,
+                DT_LEFT | DT_VCENTER,
+            );
+            p.text(
+                &format_hm(idle),
+                r,
+                &body_font,
+                t.subtext,
+                DT_RIGHT | DT_VCENTER,
+            );
         }
 
         // 履歴ボタン
-        p.fill(rect(l.bar.left, l.separator_y, l.bar.right, l.separator_y + s(1).max(1)), t.separator);
+        p.fill(
+            rect(
+                l.bar.left,
+                l.separator_y,
+                l.bar.right,
+                l.separator_y + s(1).max(1),
+            ),
+            t.separator,
+        );
         p.fill_round(l.button, 4, if hover { t.button_hover } else { t.button });
-        p.text("履歴を表示", l.button, &body_font, t.text, DT_CENTER | DT_VCENTER);
+        p.text(
+            "履歴を表示",
+            l.button,
+            &body_font,
+            t.text,
+            DT_CENTER | DT_VCENTER,
+        );
     });
 }
 
-pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT { unsafe {
-    match msg {
-        WM_PAINT => {
-            paint(hwnd);
-            0
-        }
-        WM_ERASEBKGND => 1,
-        WM_ACTIVATE => {
-            if wparam & 0xFFFF == WA_INACTIVE {
-                if IsWindowVisible(hwnd) != 0 {
-                    hide();
+pub unsafe extern "system" fn wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_PAINT => {
+                paint(hwnd);
+                0
+            }
+            WM_ERASEBKGND => 1,
+            WM_ACTIVATE => {
+                if wparam & 0xFFFF == WA_INACTIVE {
+                    if IsWindowVisible(hwnd) != 0 {
+                        hide();
+                    }
+                } else {
+                    // 自動で表示したパネルをクリックしたら、閉じるまで表示し続ける
+                    stop_auto_hide(hwnd);
                 }
-            } else {
-                // 自動で表示したパネルをクリックしたら、閉じるまで表示し続ける
-                stop_auto_hide(hwnd);
+                0
             }
-            0
-        }
-        WM_MOUSEMOVE => {
-            let hover = PtInRect(&button_rect(hwnd), point_from_lparam(lparam)) != 0;
-            if with_state(|s| std::mem::replace(&mut s.panel_hover, hover)) != hover {
-                InvalidateRect(hwnd, null(), 0);
-            }
-            let mut track = TRACKMOUSEEVENT {
-                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
-                dwFlags: TME_LEAVE,
-                hwndTrack: hwnd,
-                dwHoverTime: 0,
-            };
-            TrackMouseEvent(&mut track);
-            0
-        }
-        WM_MOUSELEAVE => {
-            if with_state(|s| std::mem::replace(&mut s.panel_hover, false)) {
-                InvalidateRect(hwnd, null(), 0);
-            }
-            0
-        }
-        WM_LBUTTONUP => {
-            if PtInRect(&button_rect(hwnd), point_from_lparam(lparam)) != 0 {
-                hide();
-                history::open();
-            }
-            0
-        }
-        WM_KEYDOWN => {
-            if wparam == VK_ESCAPE as usize {
-                hide();
-            }
-            0
-        }
-        WM_TIMER => {
-            match wparam {
-                TIMER_REFRESH => {
-                    reload_records();
-                    place(hwnd);
+            WM_MOUSEMOVE => {
+                let hover = PtInRect(&button_rect(hwnd), point_from_lparam(lparam)) != 0;
+                if with_state(|s| std::mem::replace(&mut s.panel_hover, hover)) != hover {
                     InvalidateRect(hwnd, null(), 0);
                 }
-                // マウスを乗せている間は消さない (タイマーは繰り返すので、離れた後に消える)
-                TIMER_AUTO_HIDE if !cursor_in_window(hwnd) => hide(),
-                _ => {}
+                let mut track = TRACKMOUSEEVENT {
+                    cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                TrackMouseEvent(&mut track);
+                0
             }
-            0
+            WM_MOUSELEAVE => {
+                if with_state(|s| std::mem::replace(&mut s.panel_hover, false)) {
+                    InvalidateRect(hwnd, null(), 0);
+                }
+                0
+            }
+            WM_LBUTTONUP => {
+                if PtInRect(&button_rect(hwnd), point_from_lparam(lparam)) != 0 {
+                    hide();
+                    history::open();
+                }
+                0
+            }
+            WM_KEYDOWN => {
+                if wparam == VK_ESCAPE as usize {
+                    hide();
+                }
+                0
+            }
+            WM_TIMER => {
+                match wparam {
+                    TIMER_REFRESH => {
+                        reload_records();
+                        place(hwnd);
+                        InvalidateRect(hwnd, null(), 0);
+                    }
+                    // マウスを乗せている間は消さない (タイマーは繰り返すので、離れた後に消える)
+                    TIMER_AUTO_HIDE if !cursor_in_window(hwnd) => hide(),
+                    _ => {}
+                }
+                0
+            }
+            WM_DPICHANGED => {
+                place(hwnd);
+                0
+            }
+            WM_SETTINGCHANGE => {
+                InvalidateRect(hwnd, null(), 0);
+                0
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
-        WM_DPICHANGED => {
-            place(hwnd);
-            0
-        }
-        WM_SETTINGCHANGE => {
-            InvalidateRect(hwnd, null(), 0);
-            0
-        }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-}}
+}

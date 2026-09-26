@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::record::{parse_color, Label, Labels};
+use crate::record::{Label, Labels, parse_color};
 
 /// 前回の変化からパネルを表示するまでの既定の時間 (分)
 const DEFAULT_POPUP_INTERVAL_MINUTES: f64 = 30.0;
@@ -63,17 +63,25 @@ pub fn parse(content: &str) -> Result<Config, String> {
     for (task, label) in raw.labels {
         let color = match label.color.as_deref() {
             Some(code) => Some(parse_color(code).ok_or_else(|| {
-                format!("設定ファイルのカラーコードが正しくありません: {} ({})", code, task)
+                format!(
+                    "設定ファイルのカラーコードが正しくありません: {} ({})",
+                    code, task
+                )
             })?),
             None => None,
         };
-        let text = label.label.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let text = label
+            .label
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         labels.insert(task, Label { text, color });
     }
 
     Ok(Config {
         popup_interval: positive_duration(
-            raw.popup_interval_minutes.unwrap_or(DEFAULT_POPUP_INTERVAL_MINUTES) * 60.0,
+            raw.popup_interval_minutes
+                .unwrap_or(DEFAULT_POPUP_INTERVAL_MINUTES)
+                * 60.0,
         ),
         auto_hide: positive_duration(raw.auto_hide_seconds.unwrap_or(DEFAULT_AUTO_HIDE_SECONDS)),
         labels,
@@ -86,7 +94,11 @@ pub fn config_path(record_path: &Path) -> PathBuf {
     let is_txt = record_path
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"));
-    let base = if is_txt { record_path.with_extension("") } else { record_path.to_path_buf() };
+    let base = if is_txt {
+        record_path.with_extension("")
+    } else {
+        record_path.to_path_buf()
+    };
     let mut path = base.into_os_string();
     path.push(".config");
     PathBuf::from(path)
@@ -123,9 +135,27 @@ mod tests {
         assert_eq!(config.popup_interval, Some(Duration::from_secs(30 * 60)));
         assert_eq!(config.auto_hide, Some(Duration::from_millis(5500)));
         assert_eq!(config.labels.len(), 4);
-        assert_eq!(config.labels["a"], Label { text: Some("設計作業".into()), color: Some(0xFF8800) });
-        assert_eq!(config.labels["b"], Label { text: None, color: Some(0x000080) });
-        assert_eq!(config.labels["c"], Label { text: Some("レビュー".into()), color: None });
+        assert_eq!(
+            config.labels["a"],
+            Label {
+                text: Some("設計作業".into()),
+                color: Some(0xFF8800)
+            }
+        );
+        assert_eq!(
+            config.labels["b"],
+            Label {
+                text: None,
+                color: Some(0x000080)
+            }
+        );
+        assert_eq!(
+            config.labels["c"],
+            Label {
+                text: Some("レビュー".into()),
+                color: None
+            }
+        );
         assert_eq!(config.labels["d"], Label::default());
     }
 
@@ -155,8 +185,17 @@ mod tests {
             config_path(Path::new("dir/working_time_record.txt")),
             PathBuf::from("dir/working_time_record.config")
         );
-        assert_eq!(config_path(Path::new("dir/record.TXT")), PathBuf::from("dir/record.config"));
-        assert_eq!(config_path(Path::new("dir/record.log")), PathBuf::from("dir/record.log.config"));
-        assert_eq!(config_path(Path::new("dir/record")), PathBuf::from("dir/record.config"));
+        assert_eq!(
+            config_path(Path::new("dir/record.TXT")),
+            PathBuf::from("dir/record.config")
+        );
+        assert_eq!(
+            config_path(Path::new("dir/record.log")),
+            PathBuf::from("dir/record.log.config")
+        );
+        assert_eq!(
+            config_path(Path::new("dir/record")),
+            PathBuf::from("dir/record.config")
+        );
     }
 }
